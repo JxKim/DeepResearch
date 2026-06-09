@@ -4,10 +4,16 @@ version = "0.1.0"
 description = "企业内部 AI 研究报告工作台后端服务"
 requires-python = ">=3.12"
 dependencies = [
+    "deepagents>=0.5.3",
     "fastapi>=0.115.0",
+    "httpx>=0.28.0",
+    "pymongo>=4.13.0",
     "uvicorn[standard]>=0.30.0",
     "pydantic-settings>=2.6.0",
     "loguru>=0.7.2",
+    "modelscope>=1.37.1",
+    "huggingface-hub>=1.18.0",
+    "langchain-deepseek>=1.1.0",
 ]
 
 [project.optional-dependencies]

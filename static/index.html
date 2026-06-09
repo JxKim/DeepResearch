@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 研究报告工作台</title>
+<style>
+  :root {
+    --primary: #4f46e5;
+    --primary-hover: #4338ca;
+    --bg: #f8fafc;
+    --card-bg: #ffffff;
+    --text: #1e293b;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --radius: 12px;
+    --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; min-height: 100vh; }
+
+  /* Header */
+  header { background: var(--card-bg); border-bottom: 1px solid var(--border); padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  header .logo { font-size: 20px; font-weight: 700; color: var(--primary); }
+  header .version { font-size: 12px; color: var(--text-muted); background: var(--bg); padding: 2px 8px; border-radius: 99px; }
+
+  /* Layout */
+  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+
+  /* Steps indicator */
+  .steps { display: flex; gap: 0; margin-bottom: 32px; }
+  .step { flex: 1; text-align: center; position: relative; padding: 12px 8px; font-size: 13px; color: var(--text-muted); }
+  .step::after { content: ''; position: absolute; top: 50%; right: -50%; width: 100%; height: 2px; background: var(--border); z-index: 0; }
+  .step:last-child::after { display: none; }
+  .step .dot { width: 28px; height: 28px; border-radius: 50%; background: var(--border); color: white; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; position: relative; z-index: 1; margin-bottom: 6px; }
+  .step.active .dot { background: var(--primary); }
+  .step.done .dot { background: var(--success); }
+
+  /* Card */
+  .card { background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow); border: 1px solid var(--border); padding: 32px; margin-bottom: 24px; }
+  .card h2 { font-size: 20px; margin-bottom: 8px; }
+  .card .subtitle { color: var(--text-muted); font-size: 14px; margin-bottom: 24px; }
+
+  /* Form */
+  .form-group { margin-bottom: 20px; }
+  .form-group label { display: block; font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+  .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-family: inherit; transition: border-color .2s; background: var(--bg); }
+  .form-group input:focus, .form-group textarea:focus, .form-group select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,70,229,.1); }
+  .form-group textarea { resize: vertical; min-height: 80px; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  /* Buttons */
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 24px; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; transition: all .2s; }
+  .btn-primary { background: var(--primary); color: white; }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-secondary { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+  .btn-secondary:hover { background: var(--border); }
+  .btn-success { background: var(--success); color: white; }
+  .btn-success:hover { background: #16a34a; }
+  .btn-danger { background: var(--danger); color: white; }
+  .btn-danger:hover { background: #dc2626; }
+  .btn-sm { padding: 6px 14px; font-size: 13px; }
+
+  /* Status badges */
+  .badge { display: inline-block; padding: 4px 12px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+  .badge-queued { background: #f1f5f9; color: #64748b; }
+  .badge-running { background: #fef3c7; color: #d97706; }
+  .badge-succeeded { background: #dcfce7; color: #16a34a; }
+  .badge-failed { background: #fee2e2; color: #dc2626; }
+
+  /* Spinner */
+  .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Outline tree */
+  .outline-tree { list-style: none; padding-left: 0; }
+  .outline-tree li { margin-bottom: 4px; }
+  .outline-node { border: 1px solid var(--border); border-radius: 8px; padding: 14px 18px; margin-bottom: 8px; background: var(--bg); }
+  .outline-node .node-title { font-weight: 600; font-size: 15px; }
+  .outline-node .node-question { color: var(--primary); font-size: 13px; margin-top: 4px; }
+  .outline-node .node-desc { color: var(--text-muted); font-size: 13px; margin-top: 2px; }
+  .outline-node .node-children { margin-left: 24px; margin-top: 8px; }
+
+  /* Report */
+  .report-frame { width: 100%; min-height: 500px; border: 1px solid var(--border); border-radius: var(--radius); background: white; padding: 24px; overflow-x: auto; }
+
+  /* Messages */
+  .msg { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+  .msg-info { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+  .msg-error { background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+  .msg-success { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+
+  /* Revision textarea */
+  .revision-box { margin-top: 16px; }
+
+  /* Utilities */
+  .hidden { display: none !important; }
+  .mt-16 { margin-top: 16px; }
+  .mt-24 { margin-top: 24px; }
+  .text-center { text-align: center; }
+  .text-muted { color: var(--text-muted); font-size: 13px; }
+  .gap-8 { gap: 8px; }
+  .flex { display: flex; }
+  .flex-wrap { flex-wrap: wrap; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">🔬 AI 研究报告工作台</span>
+  <span class="version">v0.1</span>
+</header>
+
+<div class="container">
+
+  <!-- Steps -->
+  <div class="steps" id="stepsBar">
+    <div class="step" id="step1"><span class="dot">1</span><br>创建项目</div>
+    <div class="step" id="step2"><span class="dot">2</span><br>生成大纲</div>
+    <div class="step" id="step3"><span class="dot">3</span><br>确认大纲</div>
+    <div class="step" id="step4"><span class="dot">4</span><br>生成报告</div>
+    <div class="step" id="step5"><span class="dot">5</span><br>查看报告</div>
+  </div>
+
+  <!-- Step 1: Create Project -->
+  <div class="card" id="section-create">
+    <h2>📝 创建研究项目</h2>
+    <p class="subtitle">填写研究主题和基础设定，系统将自动生成研究大纲</p>
+    <form id="createForm">
+      <div class="form-group">
+        <label>研究主题 *</label>
+        <input type="text" id="topic" placeholder="例如：量子计算在金融风险建模中的应用" maxlength="200" required>
+      </div>
+      <div class="form-group">
+        <label>研究目标 *</label>
+        <textarea id="researchGoal" placeholder="描述希望达成的研究目标" maxlength="500" required></textarea>
+      </div>
+      <div class="form-group">
+        <label>目标读者 *</label>
+        <input type="text" id="targetAudience" placeholder="例如：金融科技从业者、学术研究者" maxlength="100" required>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>地域范围</label>
+          <select id="regionScope">
+            <option value="global">全球</option>
+            <option value="china">中国</option>
+            <option value="overseas">海外</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>时间范围</label>
+          <select id="timeScopeType">
+            <option value="recent_years">近年</option>
+            <option value="unlimited">不限</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group hidden" id="yearsGroup">
+        <label>年数</label>
+        <input type="number" id="years" value="3" min="1" max="20">
+      </div>
+      <button type="submit" class="btn btn-primary" id="btnCreate">🚀 创建项目</button>
+    </form>
+  </div>
+
+  <!-- Section: Waiting for outline -->
+  <div class="card hidden text-center" id="section-waiting-outline">
+    <div class="spinner"></div>
+    <h2 style="margin-top:16px;">正在生成研究大纲...</h2>
+    <p class="text-muted mt-16">系统正在分析主题、收集资料并构建大纲结构</p>
+    <p class="text-muted" id="waitingOutlineStatus"></p>
+  </div>
+
+  <!-- Section: Outline Ready -->
+  <div class="card hidden" id="section-outline">
+    <h2>📋 研究大纲</h2>
+    <p class="subtitle">请审阅自动生成的研究大纲，确认或提交修改意见</p>
+    <div id="outlineContent"></div>
+    <div class="flex gap-8 mt-24">
+      <button class="btn btn-success" id="btnConfirm">✅ 确认大纲</button>
+      <button class="btn btn-secondary" id="btnRevise">✏️ 修改大纲</button>
+    </div>
+    <div class="revision-box hidden" id="revisionBox">
+      <div class="form-group">
+        <label>修改意见</label>
+        <textarea id="revisionInstruction" placeholder="请描述您希望对大纲做的修改..." maxlength="1000"></textarea>
+      </div>
+      <button class="btn btn-primary mt-16" id="btnSubmitRevision">提交修改</button>
+    </div>
+  </div>
+
+  <!-- Section: Waiting for revision -->
+  <div class="card hidden text-center" id="section-waiting-revision">
+    <div class="spinner"></div>
+    <h2 style="margin-top:16px;">正在根据您的意见修改大纲...</h2>
+    <p class="text-muted mt-16" id="waitingRevisionStatus"></p>
+  </div>
+
+  <!-- Section: Outline Confirmed -->
+  <div class="card hidden text-center" id="section-outline-confirmed">
+    <h2>✅ 大纲已确认</h2>
+    <p class="text-muted mt-16">大纲已确认，现在可以生成研究报告了</p>
+    <button class="btn btn-primary mt-24" id="btnGenerateReport">📄 生成研究报告</button>
+    <div class="hidden mt-24" id="reportInstructionBox">
+      <div class="form-group">
+        <label>补充要求（可选）</label>
+        <textarea id="userInstruction" placeholder="对报告风格、侧重点的额外要求..." maxlength="1000"></textarea>
+      </div>
+      <button class="btn btn-primary mt-16" id="btnSubmitReport">提交生成</button>
+    </div>
+  </div>
+
+  <!-- Section: Waiting for report -->
+  <div class="card hidden text-center" id="section-waiting-report">
+    <div class="spinner"></div>
+    <h2 style="margin-top:16px;">正在生成研究报告...</h2>
+    <p class="text-muted mt-16">AI 正在撰写研究报告，请稍候</p>
+    <p class="text-muted" id="waitingReportStatus"></p>
+  </div>
+
+  <!-- Section: Report Ready -->
+  <div class="card hidden" id="section-report">
+    <h2>📄 研究报告</h2>
+    <p class="subtitle" id="reportTitle"></p>
+    <div class="report-frame" id="reportContent"></div>
+    <div class="mt-24" id="reportSources"></div>
+  </div>
+
+  <!-- Error / Reset -->
+  <div class="card hidden text-center" id="section-error">
+    <h2>⚠️ 出错了</h2>
+    <p class="text-muted mt-16" id="errorMessage"></p>
+    <button class="btn btn-primary mt-24" onclick="location.reload()">🔄 重新开始</button>
+  </div>
+
+  <!-- Debug Info -->
+  <div class="card hidden" id="section-debug" style="opacity:0.6;">
+    <details>
+      <summary style="cursor:pointer;font-size:13px;color:var(--text-muted);">🔧 调试信息</summary>
+      <pre id="debugInfo" style="font-size:12px;margin-top:8px;white-space:pre-wrap;"></pre>
+    </details>
+  </div>
+
+</div>
+
+<script>
+// ============================================================
+// Configuration
+// ============================================================
+const API = window.location.origin + '/api/v1';
+
+// ============================================================
+// State
+// ============================================================
+const state = {
+  projectId: null,
+  taskId: null,       // current pending task
+  status: null,       // project status
+  outline: null,
+  report: null,
+  polling: null,      // interval id
+};
+
+// ============================================================
+// Helpers
+// ============================================================
+function $(id) { return document.getElementById(id); }
+
+function show(...ids) { ids.forEach(id => $(id).classList.remove('hidden')); }
+function hide(...ids) { ids.forEach(id => $(id).classList.add('hidden')); }
+
+function debug(msg, data) {
+  show('section-debug');
+  $('debugInfo').textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n` + (data ? JSON.stringify(data, null, 2) + '\n' : '');
+  console.log(msg, data);
+}
+
+async function api(method, path, body) {
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const url = API + path;
+  debug(`>>> ${method} ${url}`, body);
+  const res = await fetch(url, opts);
+  const data = await res.json();
+  debug(`<<< ${res.status}`, data);
+  if (!res.ok) {
+    const detail = data.detail || JSON.stringify(data);
+    throw new Error(detail);
+  }
+  return data;
+}
+
+function formatStatus(status) {
+  const map = {
+    queued: '排队中', running: '运行中', succeeded: '成功', failed: '失败',
+    created: '已创建', brief_generating: '大纲生成中', outline_ready: '大纲就绪',
+    outline_revising: '大纲修改中', outline_confirmed: '大纲已确认',
+    research_running: '报告中', report_ready: '报告就绪', completed: '已完成',
+  };
+  return map[status] || status;
+}
+
+// ============================================================
+// Steps UI
+// ============================================================
+function setStep(n) {
+  for (let i = 1; i <= 5; i++) {
+    const el = $('step' + i);
+    el.classList.remove('active', 'done');
+    if (i < n) el.classList.add('done');
+    if (i === n) el.classList.add('active');
+  }
+}
+
+// ============================================================
+// Wait for task completion (poll)
+// ============================================================
+function startPolling(taskId, onSucceeded, onFailed, statusCallback) {
+  if (state.polling) clearInterval(state.polling);
+
+  let count = 0;
+  state.polling = setInterval(async () => {
+    try {
+      const task = await api('GET', `/tasks/${taskId}`);
+      if (statusCallback) statusCallback(task);
+
+      if (task.status === 'succeeded') {
+        clearInterval(state.polling);
+        state.polling = null;
+        onSucceeded(task);
+      } else if (task.status === 'failed') {
+        clearInterval(state.polling);
+        state.polling = null;
+        onFailed(task);
+      }
+    } catch (e) {
+      debug('Poll error: ' + e.message);
+      // 轮询中偶尔失败不中断，最多重试 100 次
+      if (++count > 100) {
+        clearInterval(state.polling);
+        state.polling = null;
+        showError('轮询任务状态超时: ' + e.message);
+      }
+    }
+  }, 2000); // poll every 2 seconds
+}
+
+function showError(msg) {
+  hide('section-create', 'section-waiting-outline', 'section-outline',
+       'section-waiting-revision', 'section-outline-confirmed',
+       'section-waiting-report', 'section-report');
+  show('section-error');
+  $('errorMessage').textContent = msg;
+  debug('ERROR: ' + msg);
+}
+
+// ============================================================
+// Step 1: Create Project
+// ============================================================
+$('timeScopeType').addEventListener('change', function() {
+  if (this.value === 'recent_years') show('yearsGroup');
+  else hide('yearsGroup');
+});
+
+$('createForm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  $('btnCreate').disabled = true;
+  $('btnCreate').textContent = '创建中...';
+
+  try {
+    const timeScope = {
+      type: $('timeScopeType').value,
+    };
+    if (timeScope.type === 'recent_years') {
+      timeScope.years = parseInt($('years').value) || 3;
+    }
+
+    const result = await api('POST', '/research-projects', {
+      topic: $('topic').value.trim(),
+      research_goal: $('researchGoal').value.trim(),
+      target_audience: $('targetAudience').value.trim(),
+      region_scope: $('regionScope').value,
+      time_scope: timeScope,
+    });
+
+    state.projectId = result.project_id;
+    state.taskId = result.initial_task_id;
+    state.status = result.status;
+
+    debug('Project created', result);
+
+    // Move to step 2: waiting for outline
+    hide('section-create');
+    show('section-waiting-outline');
+    setStep(2);
+
+    startPolling(
+      state.taskId,
+      // onSucceeded: outline is ready
+      async () => { await loadAndShowOutline(); },
+      // onFailed
+      (task) => { showError('大纲生成失败: ' + task.message); },
+      // statusCallback
+      (task) => { $('waitingOutlineStatus').textContent = '状态: ' + formatStatus(task.status) + ' — ' + (task.message || ''); }
+    );
+
+  } catch (e) {
+    showError('创建项目失败: ' + e.message);
+  } finally {
+    $('btnCreate').disabled = false;
+    $('btnCreate').textContent = '🚀 创建项目';
+  }
+});
+
+// ============================================================
+// Step 2-3: Load & Show Outline
+// ============================================================
+async function loadAndShowOutline() {
+  try {
+    const data = await api('GET', `/research-projects/${state.projectId}/outline`);
+    state.outline = data.outline;
+    state.status = data.status;
+
+    hide('section-waiting-outline', 'section-waiting-revision');
+    show('section-outline');
+    setStep(3);
+
+    renderOutline(data.outline);
+    $('revisionBox').classList.add('hidden');
+
+  } catch (e) {
+    showError('获取大纲失败: ' + e.message);
+  }
+}
+
+function renderOutline(nodes) {
+  if (!nodes || nodes.length === 0) {
+    $('outlineContent').innerHTML = '<p class="text-muted">暂无大纲数据</p>';
+    return;
+  }
+
+  function renderNode(n) {
+    let html = `<div class="outline-node">
+      <div class="node-title">${esc(n.title)}</div>
+      <div class="node-question">❓ ${esc(n.question)}</div>
+      <div class="node-desc">${esc(n.description)}</div>`;
+    if (n.children && n.children.length > 0) {
+      html += '<div class="node-children">';
+      n.children.forEach(c => { html += renderNode(c); });
+      html += '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  $('outlineContent').innerHTML = nodes.map(renderNode).join('');
+}
+
+function esc(s) {
+  if (!s) return '';
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+// ============================================================
+// Confirm / Revise Outline
+// ============================================================
+$('btnConfirm').addEventListener('click', async function() {
+  if (!confirm('确认大纲后将无法在此阶段修改，确定继续吗？')) return;
+
+  try {
+    const result = await api('PUT', `/research-projects/${state.projectId}/outline`, {
+      action: 'confirm',
+    });
+    state.status = result.status;
+
+    hide('section-outline');
+    show('section-outline-confirmed');
+    setStep(4);
+    $('reportInstructionBox').classList.add('hidden');
+
+  } catch (e) {
+    alert('确认失败: ' + e.message);
+  }
+});
+
+$('btnRevise').addEventListener('click', function() {
+  $('revisionBox').classList.remove('hidden');
+});
+
+$('btnSubmitRevision').addEventListener('click', async function() {
+  const instruction = $('revisionInstruction').value.trim();
+  if (!instruction) { alert('请填写修改意见'); return; }
+
+  try {
+    const result = await api('PUT', `/research-projects/${state.projectId}/outline`, {
+      action: 'revise',
+      revision_instruction: instruction,
+    });
+
+    state.taskId = result.revision_task_id;
+    state.status = result.status;
+
+    hide('section-outline');
+    show('section-waiting-revision');
+    setStep(2);
+
+    startPolling(
+      state.taskId,
+      async () => { await loadAndShowOutline(); },
+      (task) => { showError('大纲修改失败: ' + task.message); },
+      (task) => { $('waitingRevisionStatus').textContent = '状态: ' + formatStatus(task.status) + ' — ' + (task.message || ''); }
+    );
+
+  } catch (e) {
+    alert('提交修改失败: ' + e.message);
+  }
+});
+
+// ============================================================
+// Step 4: Generate Report
+// ============================================================
+$('btnGenerateReport').addEventListener('click', function() {
+  $('reportInstructionBox').classList.remove('hidden');
+});
+
+$('btnSubmitReport').addEventListener('click', async function() {
+  const instruction = $('userInstruction').value.trim() || null;
+
+  try {
+    const result = await api('POST', `/research-projects/${state.projectId}/report-tasks`, {
+      user_instruction: instruction,
+    });
+
+    state.taskId = result.task_id;
+
+    hide('section-outline-confirmed');
+    show('section-waiting-report');
+    setStep(4);
+
+    startPolling(
+      state.taskId,
+      async () => { await loadAndShowReport(); },
+      (task) => { showError('报告生成失败: ' + task.message); },
+      (task) => { $('waitingReportStatus').textContent = '状态: ' + formatStatus(task.status) + ' — ' + (task.message || ''); }
+    );
+
+  } catch (e) {
+    alert('提交报告生成失败: ' + e.message);
+  }
+});
+
+// ============================================================
+// Step 5: View Report
+// ============================================================
+async function loadAndShowReport() {
+  try {
+    const data = await api('GET', `/research-projects/${state.projectId}/reports/latest`);
+    state.report = data;
+
+    hide('section-waiting-report');
+    show('section-report');
+    setStep(5);
+
+    $('reportTitle').textContent = data.title || '研究报告';
+    $('reportContent').innerHTML = data.html || '<p>报告内容为空</p>';
+
+    // Render sources
+    if (data.sources && data.sources.length > 0) {
+      let srcHtml = '<h3>📚 参考来源</h3><ul style="padding-left:20px;">';
+      data.sources.forEach(s => {
+        const title = s.title || '未知来源';
+        if (s.url) {
+          srcHtml += `<li><a href="${esc(s.url)}" target="_blank">${esc(title)}</a> <span class="text-muted">(${esc(s.source_type)})</span></li>`;
+        } else {
+          srcHtml += `<li>${esc(title)} <span class="text-muted">(${esc(s.source_type)})</span></li>`;
+        }
+      });
+      srcHtml += '</ul>';
+      $('reportSources').innerHTML = srcHtml;
+    }
+
+  } catch (e) {
+    showError('获取报告失败: ' + e.message);
+  }
+}
+
+// ============================================================
+// Init
+// ============================================================
+setStep(1);
+debug('App initialized. API base: ' + API);
+
+// Allow paste from clipboard for quick testing
+document.addEventListener('keydown', function(e) {
+  if (e.ctrlKey && e.key === 'v' && document.activeElement === document.body) {
+    // Paste into first visible input
+    const vis = document.querySelector('input:not(.hidden):not([type="hidden"])');
+    if (vis) vis.focus();
+  }
+});
+</script>
+
+</body>
+</html>

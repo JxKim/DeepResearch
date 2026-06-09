@@ -1,0 +1,8 @@
+.agents
+.codex
+__pycache__/
+课件/
+.vscode/
+.env
+data/
+reports/

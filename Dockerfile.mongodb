@@ -1,0 +1,36 @@
+# =============================================================================
+# MongoDB 7.0 —— Deep Research 专用镜像
+# =============================================================================
+# 构建：
+#   docker build -f Dockerfile.mongodb -t deep-research-mongo:7.0 .
+#
+# 运行（无鉴权，本地开发）：
+#   docker run -d --name deep-research-mongo \
+#     -p 27017:27017 \
+#     -v deep-research-mongo-data:/data/db \
+#     deep-research-mongo:7.0
+#
+# 运行（开启鉴权，推荐）：
+#   docker run -d --name deep-research-mongo \
+#     -p 27017:27017 \
+#     -v deep-research-mongo-data:/data/db \
+#     -e MONGO_INITDB_ROOT_USERNAME=admin \
+#     -e MONGO_INITDB_ROOT_PASSWORD=your_root_password \
+#     -e MONGO_APP_USERNAME=deepresearch \
+#     -e MONGO_APP_PASSWORD=your_app_password \
+#     deep-research-mongo:7.0
+#
+# 开启鉴权后，连接字符串需改为：
+#   mongodb://<MONGO_APP_USERNAME>:<MONGO_APP_PASSWORD>@localhost:27017/deep_research?authSource=deep_research
+# =============================================================================
+
+FROM docker.m.daocloud.io/library/mongo:7.0
+
+# 应用数据库初始化脚本（仅在首次启动且数据库为空时执行）
+COPY mongo/init-mongo.js /docker-entrypoint-initdb.d/init-mongo.js
+
+# 可选：自定义 MongoDB 配置文件
+# COPY mongo/mongod.conf /etc/mongod.conf
+
+LABEL description="Deep Research MongoDB 7.0"
+LABEL maintainer="dev@deep-research"
