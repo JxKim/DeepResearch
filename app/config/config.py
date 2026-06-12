@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_database: str = "deep_research"
     redis_url: str = "redis://localhost:6379/0"
+    celery_broker_url: str | None = None
 
     llm_provider: str = "openai"
     llm_model_name: str = "gpt-4.1-mini"

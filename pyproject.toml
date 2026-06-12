@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "企业内部 AI 研究报告工作台后端服务"
 requires-python = ">=3.12"
 dependencies = [
+    "celery[redis]>=5.4.0",
     "deepagents>=0.5.3",
     "fastapi>=0.115.0",
     "httpx>=0.28.0",

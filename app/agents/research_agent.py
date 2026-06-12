@@ -228,11 +228,26 @@ class ResearchAgent:
         """
 
         project_id = self._get_project_id(project=project)
-        await research_project_repository.clear_research_sections(project_id=project_id)
         expected_section_ids = self._expected_research_section_ids(outline=outline)
-        sections: list[dict[str, Any]] = []
-        missing_section_ids = sorted(expected_section_ids)
+        sections = await research_project_repository.get_research_sections(project_id=project_id)
+        saved_section_ids = {
+            str(section.get("section_id"))
+            for section in sections
+            if isinstance(section, dict) and section.get("section_id")
+        }
+        if saved_section_ids:
+            logger.info(
+                "检测到已保存研究章节，将继续补写缺失章节，project_id={}，saved={}",
+                project_id,
+                sorted(saved_section_ids),
+            )
+        else:
+            await research_project_repository.clear_research_sections(project_id=project_id)
+
+        missing_section_ids = sorted(expected_section_ids - saved_section_ids)
         for attempt in range(1, 5):
+            if not missing_section_ids:
+                break
             payload = self._build_generate_research_result_input(
                 project=project,
                 outline=outline,

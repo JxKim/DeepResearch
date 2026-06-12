@@ -1,5 +1,3 @@
-import asyncio
-from collections.abc import Coroutine
 from typing import Any
 
 from loguru import logger
@@ -16,11 +14,12 @@ def start_generate_research_brief_task(project_id: str, task_id: str) -> None:
     asyncio 事件循环，不直接执行 Agent，也不返回任务结果。
     """
 
-    _schedule_task(
-        _run_generate_research_brief_task(project_id=project_id, task_id=task_id),
+    _send_task(
+        task_path="research.generate_research_brief",
         task_name="generate_research_brief",
         project_id=project_id,
         task_id=task_id,
+        args=(project_id, task_id),
     )
 
 
@@ -35,15 +34,12 @@ def start_revise_outline_task(
     后台执行协程，具体的大纲修改由研究管理智能体完成。
     """
 
-    _schedule_task(
-        _run_revise_outline_task(
-            project_id=project_id,
-            task_id=task_id,
-            revision_instruction=revision_instruction,
-        ),
+    _send_task(
+        task_path="research.revise_outline",
         task_name="revise_outline",
         project_id=project_id,
         task_id=task_id,
+        args=(project_id, task_id, revision_instruction),
     )
 
 
@@ -58,15 +54,12 @@ def start_generate_report_task(
     执行协程，研究结果和报告版本保存由内部执行流程完成。
     """
 
-    _schedule_task(
-        _run_generate_report_task(
-            project_id=project_id,
-            task_id=task_id,
-            user_instruction=user_instruction,
-        ),
+    _send_task(
+        task_path="research.generate_report",
         task_name="generate_report",
         project_id=project_id,
         task_id=task_id,
+        args=(project_id, task_id, user_instruction),
     )
 
 
@@ -81,40 +74,40 @@ def start_render_report_task(
     research_result 并生成 HTML 报告版本，不重新执行研究。
     """
 
-    _schedule_task(
-        _run_render_report_task(
-            project_id=project_id,
-            task_id=task_id,
-            user_instruction=user_instruction,
-        ),
+    _send_task(
+        task_path="research.render_report",
         task_name="render_report",
         project_id=project_id,
         task_id=task_id,
+        args=(project_id, task_id, user_instruction),
     )
 
 
-def _schedule_task(
-    coroutine: Coroutine[Any, Any, None],
+def _send_task(
+    task_path: str,
     task_name: str,
     project_id: str,
     task_id: str,
+    args: tuple[Any, ...],
 ) -> None:
-    """把后台协程提交到当前事件循环。
+    """把后台任务投递到 Celery 队列。
 
-    输入为待执行协程、任务名称、项目编号和任务编号；输出为空。该函数隔离
-    asyncio.create_task，保证 routers 层不直接依赖具体的后台任务启动方式。
+    输入为 Celery 任务路径、任务名称、项目编号和任务参数；输出为空。该函数隔离
+    Celery 投递细节，保证 routers 层不直接依赖具体的后台任务启动方式。
     """
 
-    asyncio.create_task(coroutine, name=f"{task_name}:{task_id}")
+    from app.celery_app import celery_app
+
+    celery_app.send_task(task_path, args=args)
     logger.info(
-        "后台任务已提交，task_name={}，project_id={}，task_id={}",
+        "后台任务已投递到 Celery，task_name={}，project_id={}，task_id={}",
         task_name,
         project_id,
         task_id,
     )
 
 
-async def _run_generate_research_brief_task(project_id: str, task_id: str) -> None:
+async def run_generate_research_brief_task(project_id: str, task_id: str) -> None:
     """执行研究任务书和大纲生成任务。
 
     输入为项目编号和任务编号；执行过程会读取研究项目、调用研究管理智能体生成
@@ -157,9 +150,10 @@ async def _run_generate_research_brief_task(project_id: str, task_id: str) -> No
             message="研究任务书和大纲生成失败",
             exc=exc,
         )
+        raise
 
 
-async def _run_revise_outline_task(
+async def run_revise_outline_task(
     project_id: str,
     task_id: str,
     revision_instruction: str,
@@ -210,9 +204,10 @@ async def _run_revise_outline_task(
             message="研究大纲修改失败",
             exc=exc,
         )
+        raise
 
 
-async def _run_generate_report_task(
+async def run_generate_report_task(
     project_id: str,
     task_id: str,
     user_instruction: str | None,
@@ -284,9 +279,10 @@ async def _run_generate_report_task(
             message="研究报告生成失败",
             exc=exc,
         )
+        raise
 
 
-async def _run_render_report_task(
+async def run_render_report_task(
     project_id: str,
     task_id: str,
     user_instruction: str | None,
@@ -337,6 +333,7 @@ async def _run_render_report_task(
             message="独立报告渲染失败",
             exc=exc,
         )
+        raise
 
 
 async def _mark_task_failed(
