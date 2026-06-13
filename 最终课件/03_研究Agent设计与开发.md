@@ -20,45 +20,525 @@
 
 ### 1.2 核心原理
 
-DeepAgents 的核心原理可以概括为：在标准模型-工具循环外面，增加一组面向长任务的默认能力，让 Agent 不只是“会调用工具”，还能够规划任务、隔离上下文、管理中间文件、委托子任务并在必要时持久化状态。
+下面的章节，会详细的介绍，deepagents当中3个方面的详细原理。面试的时候，可以直接去跟面试官说，
 
-DeepAgents 在langchain的`create_agent`外面增加了几类关键能力：
+#### 1.2.1 中间件机制
 
-| 能力    | 官方文档中的对应机制                                                             | 作用                                       |
-| ----- | ---------------------------------------------------------------------- | ---------------------------------------- |
-| 任务规划  | `write_todos`                                                          | 把复杂任务拆成可跟踪步骤，并随着新信息更新计划                  |
-| 文件系统  | `ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep` 等文件工具          | 把大输入、中间材料和大工具结果放到虚拟文件系统中                 |
-| 上下文管理 | context compression、offloading、summarization                           | 降低长任务中上下文膨胀的风险                           |
-| 子智能体  | `task` 工具和 `subagents` 配置                                              | 把检索、代码审查、数据分析等子任务委托给隔离上下文的 Agent         |
-| 后端存储  | `StateBackend`、`FilesystemBackend`、`StoreBackend`、`CompositeBackend` 等 | 控制文件写到线程状态、本地文件系统、LangGraph store 或自定义后端 |
-| 人类介入  | human-in-the-loop / interrupt                                          | 对敏感工具调用进行审批、修改或拒绝                        |
+通过create_agent创建的简单agent循环，代码如下：
 
-在本项目中，最重要的是前三类能力：todo、虚拟文件系统和子智能体。
+```python
+from langchain.agents import create_agent
 
-```mermaid
-flowchart TD
-    Main[主研究智能体]
-    Todo[Todo 规划]
-    FS[(虚拟文件系统)]
-    Task[task 工具]
-    SearchSub[信息检索子智能体]
-    Tools[搜索 / 网页读取 / RAGFlow]
-    Save[save_research_section]
-
-    Main --> Todo
-    Main --> FS
-    Main --> Task
-    Task --> SearchSub
-    SearchSub --> Tools
-    Tools --> SearchSub
-    SearchSub --> Main
-    Main --> Save
-    Main --> FS
+agent = create_agent(
+    model="deepseek-chat",
+    tools=[...],
+)
 ```
 
-DeepAgents 的“文件系统”不等于默认直接操作服务器真实目录。官方 Backends 文档说明，Deep Agents 通过可插拔 backend 暴露文件系统表面。默认 backend 是线程级的 `StateBackend`，文件存在 LangGraph agent state 中；如果使用 `FilesystemBackend` 才会读写本地磁盘，并且官方明确提醒本地文件系统访问有安全风险，生产环境要使用沙箱、权限规则或更受控的 backend。
+机制如下所示：
 
-因此，本项目中把 `/research/task_payload.json` 和 `/research/workspace/` 设计成 Agent 工作区，是为了让 Agent 在虚拟文件系统中管理大输入和中间材料，而不是把所有内容塞进单条用户消息。
+<img src="file:///C:/Users/m1881/AppData/Roaming/marktext/images/2026-06-12-16-59-04-image.png" title="" alt="" data-align="center">
+
+只有简单的model调用和tools之间的流转。
+
+而在此基础上，create_agent还为我们提供了middleware参数，从而可以通过middleware，来加强这个循环过程，如下所示：
+
+<img src="file:///C:/Users/m1881/AppData/Roaming/marktext/images/2026-06-12-17-00-57-image.png" title="" alt="" data-align="center">
+
+整个调用Agent的过程，可以在不改变model和tools的相关代码前提下，实现多处调整：
+
+- before/after_agent：在agent调用的起始输入和终点输出，进行相关处理（切片编程思想）；
+- before/after_model: 在model调用的前后，进行相关处理（切片编程思想）；
+- wrap_tool/model_call: 通过handler回调的方式，拦截工具/模型执行，可以为工具执行/模型执行，添加重试，缓存，多次调用等相关逻辑（代理思想）。
+
+另外，middleware还能够为模型额外添加其可调用的工具。
+
+AgentMiddleware基类如下所示：
+
+```python
+class AgentMiddleware(Generic[StateT, ContextT, ResponseT]):
+    """Base middleware class for an agent.
+
+    Subclass this and implement any of the defined methods to customize agent behavior
+    between steps in the main agent loop.
+
+    Type Parameters:
+        StateT: The type of the agent state. Defaults to `AgentState[Any]`.
+        ContextT: The type of the runtime context. Defaults to `None`.
+        ResponseT: The type of the structured response. Defaults to `Any`.
+    """
+    tools: Sequence[BaseTool]
+    """Additional tools registered by the middleware."""
+
+    @property
+    def name(self) -> str:
+        """The name of the middleware instance.
+
+        Defaults to the class name, but can be overridden for custom naming.
+        """
+        return self.__class__.__name__
+
+    def before_agent(self, state: StateT, runtime: Runtime[ContextT]) -> dict[str, Any] | None:
+        pass
+
+    async def abefore_agent(
+        self, state: StateT, runtime: Runtime[ContextT]
+    ) -> dict[str, Any] | None:
+        pass
+
+    def before_model(self, state: StateT, runtime: Runtime[ContextT]) -> dict[str, Any] | None:
+        pass
+
+    async def abefore_model(
+        self, state: StateT, runtime: Runtime[ContextT]
+    ) -> dict[str, Any] | None:
+        pass
+
+    def after_model(self, state: StateT, runtime: Runtime[ContextT]) -> dict[str, Any] | None:
+        pass
+
+    async def aafter_model(
+        self, state: StateT, runtime: Runtime[ContextT]
+    ) -> dict[str, Any] | None:
+        pass
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[ContextT],
+        handler: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
+    ) -> ModelResponse[ResponseT] | AIMessage | ExtendedModelResponse[ResponseT]:
+        pass
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[ContextT],
+        handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
+    ) -> ModelResponse[ResponseT] | AIMessage | ExtendedModelResponse[ResponseT]:
+        pass
+
+    def after_agent(self, state: StateT, runtime: Runtime[ContextT]) -> dict[str, Any] | None:
+        pass
+
+    async def aafter_agent(
+        self, state: StateT, runtime: Runtime[ContextT]
+    ) -> dict[str, Any] | None:
+        pass
+
+    def wrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
+    ) -> ToolMessage | Command[Any]:
+        pass
+
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        pass
+```
+
+##### 1.2.1.1 ToDoListMiddleware
+
+ToDoListMiddleware会在`wrap_model_call`处生效，在每次调用大模型时，都会为大模型添加一个system prompt，并为大模型添加一个`write_todos`的工具。
+
+实现如下：
+
+```python
+class TodoListMiddleware(AgentMiddleware[PlanningState[ResponseT], ContextT, ResponseT]):
+        def wrap_model_call(
+        self,
+        request: ModelRequest[ContextT],
+        handler: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
+    ) -> ModelResponse[ResponseT] | AIMessage:
+        """Update the system message to include the todo system prompt.
+
+        Args:
+            request: Model request to execute (includes state and runtime).
+            handler: Async callback that executes the model request and returns
+                `ModelResponse`.
+
+        Returns:
+            The model call result.
+        """
+        if request.system_message is not None:
+            new_system_content = [
+                *request.system_message.content_blocks,
+                {"type": "text", "text": f"\n\n{self.system_prompt}"},
+            ]
+        else:
+            new_system_content = [{"type": "text", "text": self.system_prompt}]
+        new_system_message = SystemMessage(
+            content=cast("list[str | dict[str, str]]", new_system_content)
+        )
+        return handler(request.override(system_message=new_system_message))
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[ContextT],
+        handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
+    ) -> ModelResponse[ResponseT] | AIMessage:
+        """Update the system message to include the todo system prompt.
+
+        Args:
+            request: Model request to execute (includes state and runtime).
+            handler: Async callback that executes the model request and returns
+                `ModelResponse`.
+
+        Returns:
+            The model call result.
+        """
+        if request.system_message is not None:
+            new_system_content = [
+                *request.system_message.content_blocks,
+                {"type": "text", "text": f"\n\n{self.system_prompt}"},
+            ]
+        else:
+            new_system_content = [{"type": "text", "text": self.system_prompt}]
+        new_system_message = SystemMessage(
+            content=cast("list[str | dict[str, str]]", new_system_content)
+        )
+        return await handler(request.override(system_message=new_system_message))
+```
+
+##### 1.2.1.2 FileSystemMiddleware
+
+`FileSystemMiddleware`实现了wrap_model_call和wrap_tool_call。
+
+在wrap_model_call当中，FileSystemMiddleware会在原SystemPrompt的基础上面，添加上让模型使用文件系统相关工具：
+
+```textile
+## Following Conventions
+
+- Read files before editing — understand existing content before making changes
+- Mimic existing style, naming conventions, and patterns
+
+## Filesystem Tools `ls`, `read_file`, `write_file`, `edit_file`, `glob`, `grep`
+
+You have access to a filesystem which you can interact with using these tools.
+All file paths must start with a /. Follow the tool docs for the available tools, and use pagination (offset/limit) when reading large files.
+
+- ls: list files in a directory (requires absolute path)
+- read_file: read a file from the filesystem
+- write_file: write to a file in the filesystem
+- edit_file: edit a file in the filesystem
+- glob: find files matching a pattern (e.g., "**/*.py")
+- grep: search for text within files
+
+## Large Tool Results
+
+When a tool result is too large, it may be offloaded into the filesystem instead of being returned inline. In those cases, use `read_file` to inspect the saved result in chunks, or use `grep` within `{large_tool_results_prefix}/` if you need to search across offloaded tool results and do not know the exact file path. Offloaded tool results are stored under `{large_tool_results_prefix}/<tool_call_id>`.
+```
+
+另外，还会将过长的消息进行裁剪，然后再来进行模型调用。
+
+同样，在wrap_tool_call中，该middleware也会对工具产生的消息进行裁剪，裁剪后的消息会放到文件系统中，并告知模型，可以通过读取文件的方式，来获取到消息内容。
+
+##### 1.2.1.3 SubAgentMiddleware
+
+`SubAgentMiddleware`实现了wrap_model_call，在每次调用模型前，会为模型添加上新的system_prompt： 告诉模型当前有哪些子agent可以使用，每个子agent的描述信息。
+
+SubAgentMiddleware中，为主智能体提供子智能体调用的方式，是给主智能体新添加了一个task的tool，这个tool的参数包含了：调用的子智能体的名称，和调用信息。
+
+```python
+class SubAgentMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
+        def __init__(
+        self,
+        *,
+        backend: BackendProtocol | BackendFactory,
+        subagents: Sequence[SubAgent | CompiledSubAgent],
+        system_prompt: str | None = TASK_SYSTEM_PROMPT,
+        task_description: str | None = None,
+        state_schema: type | None = None,
+    ) -> None:
+        """Initialize the `SubAgentMiddleware`."""
+        super().__init__()
+
+        if not subagents:
+            msg = "At least one subagent must be specified"
+            raise ValueError(msg)
+        self._backend = backend
+        self._subagents = subagents
+        self._state_schema = state_schema
+        subagent_specs = self._get_subagents()
+        self.subagent_names: frozenset[str] = frozenset(spec["name"] for spec in subagent_specs)
+        """Declared subagent names. Public so streamers can discover them
+        without introspecting the `task` tool's closure."""
+
+        task_tool = _build_task_tool(subagent_specs, task_description)
+
+        # Build system prompt with available agents
+        if system_prompt and subagent_specs:
+            agents_desc = "\n".join(f"- {s['name']}: {s['description']}" for s in subagent_specs)
+            self.system_prompt = system_prompt + "\n\nAvailable subagent types:\n\n" + agents_desc
+        else:
+            self.system_prompt = system_prompt
+
+        self.tools = [task_tool]
+```
+
+##### 1.2.1.4 其他Middleware
+
+create_deep_agent还添加了如下middleware，仅做了解:
+
+- SummarizationMiddleware
+
+- PatchToolCallsMiddleware
+
+- 其他。。。
+
+#### 1.2.2 文件系统后端
+
+FileSystemMiddleware依赖文件系统后端来进行文件读写。文件系统后端是实现以下接口的类：
+
+| 方法                                | 功能        |
+| --------------------------------- | --------- |
+| ls                                | 列出目录内容    |
+| read                              | 分页读取文件    |
+| write                             | 创建新文件     |
+| edit                              | 精确字符串匹配   |
+| grep                              | 文本搜索      |
+| glob                              | 通配符匹配文件   |
+| upload_files() / download_files() | 批量上传/下载文件 |
+
+有如下的文件系统后端：
+
+- StateBackend：存在Langgraph的Agent State中，在一次对话线程内持久，线程间不共享；该实现为默认实现，
+
+- FileSystemBackend: 直接读写真实磁盘文件系统、也可以设置虚拟化路径，将路径约束在指定目录下面；
+
+- StoreBackend：文件存在Langgraph的Base Store当中，生产环境替代本地磁盘。容器重启、横向扩容、本地磁盘不可依赖时，用 StoreBackend 接 Mongo/Postgres/Redis/云存储背后的 LangGraph store。
+
+- Compositebackend：可以按路径前缀，路由到不同的后端。
+
+注意：子智能体的FileSystemMiddleware使用的是主agent同一个backend实例。这意味着子智能体操作的文件和主智能体是同一个文件空间。
+
+下面以使用skills作为例子，来讲解StateBackend、FileSystemBackend和StoreBackend的不同：
+
+使用StateBackend:
+
+```python
+  from deepagents import create_deep_agent
+  from deepagents.backends.utils import create_file_data
+
+  agent = create_deep_agent(
+      model="openai:gpt-4.1-mini",
+      tools=[],
+      skills=["/skills/project/"],
+  )
+
+  skill_md = """---
+  name: web-research
+  description: 用于公开资料检索、来源整理和结论归纳
+  ---
+
+  # Web Research
+
+  当用户要求调研某个主题时：
+  1. 明确问题范围
+  2. 收集来源
+  3. 整理关键事实
+  4. 输出带来源的总结
+  """
+
+  result = agent.invoke(
+      {
+          "messages": [
+              {"role": "user", "content": "帮我调研一下新能源汽车行业趋势"}
+          ],
+          "files": {
+              "/skills/project/web-research/SKILL.md": create_file_data(skill_md),
+          },
+      },
+      config={
+          "configurable": {
+              "thread_id": "demo-statebackend-skills"
+          }
+      },
+  )
+```
+
+**注意**：使用StateBackend的时候，必须在invoke时，传入一个files key，作为skills的具体内容信息，仅在构建create_deep_agents时，传入skills目录，agent在运行过程中，无法读取到具体的skills内容。
+
+使用FileSystemBackend:
+
+```python
+  from deepagents import create_deep_agent
+  from deepagents.backends import FilesystemBackend
+
+  backend = FilesystemBackend(
+      root_dir="/home/m1881/pycharm_projects/DeepResearch"
+  )
+
+  agent = create_deep_agent(
+      model="openai:gpt-4.1-mini",
+      tools=[],
+      backend=backend,
+      skills=["/agent_skills/"],
+  )
+
+  result = agent.invoke(
+      {
+          "messages": [
+              {"role": "user", "content": "帮我调研一下新能源汽车行业趋势"}
+          ],
+      },
+      config={
+          "configurable": {
+              "thread_id": "demo-filesystembackend-skills"
+          }
+      },
+  )
+```
+
+**注意**：使用FileSystemBackend的时候，在invoke，无需传入files，因为FilesystemBackend可以真实读取磁盘上面文件内容。
+
+使用StoreBackend:
+
+```python
+  from deepagents import create_deep_agent
+  from deepagents.backends import StoreBackend
+  from langgraph.store.memory import InMemoryStore
+
+  store = InMemoryStore()
+
+  skill_md = """---
+  name: web-research
+  description: 用于公开资料检索、来源整理和结论归纳
+  ---
+
+  # Web Research
+
+  当用户要求调研某个主题时：
+  1. 明确问题范围
+  2. 收集来源
+  3. 整理关键事实
+  4. 输出带来源的总结
+  """
+
+  namespace = ("user-123", "agent-files")
+
+  # 先把 skill 文件写入 LangGraph store
+  store.put(
+      namespace,
+      "/skills/project/web-research/SKILL.md",
+      {
+          "content": skill_md,
+          "encoding": "utf-8",
+      },
+  )
+
+  backend = StoreBackend(
+      store=store,
+      namespace=lambda rt: namespace,
+  )
+
+  agent = create_deep_agent(
+      model="openai:gpt-4.1-mini",
+      tools=[],
+      backend=backend,
+      store=store,
+      skills=["/skills/project/"],
+  )
+
+  result = agent.invoke(
+      {
+          "messages": [
+              {
+                  "role": "user",
+                  "content": "帮我调研一下新能源汽车行业趋势，并整理成简短报告",
+              }
+          ],
+      },
+      config={
+          "configurable": {
+              "thread_id": "demo-storebackend-skills"
+          }
+      },
+  )
+```
+
+#### 1.2.3 子智能体
+
+在deepagents中，子智能体会作为一个特殊的task/tool，给到主智能体去调用。
+
+子智能体的定义，有两种方式：
+
+可通过声明式的方式来进行定义：
+
+```python
+import os
+from typing import Literal
+
+from deepagents import create_deep_agent
+from tavily import TavilyClient
+
+tavily_client = TavilyClient(api_key=os.environ["TAVILY_API_KEY"])
+
+
+def internet_search(
+    query: str,
+    max_results: int = 5,
+    topic: Literal["general", "news", "finance"] = "general",
+    include_raw_content: bool = False,
+):
+    """Run a web search"""
+    return tavily_client.search(
+        query,
+        max_results=max_results,
+        include_raw_content=include_raw_content,
+        topic=topic,
+    )
+
+
+research_subagent = {
+    "name": "research-agent",
+    "description": "Used to research more in depth questions",
+    "system_prompt": "You are a great researcher",
+    "tools": [internet_search],
+    "model": "openai:gpt-5.4",  # Optional override, defaults to main agent model
+}
+subagents = [research_subagent]
+
+agent = create_deep_agent(
+    model="google_genai:gemini-3.5-flash",
+    subagents=subagents,
+)
+```
+
+可通过预编译的CompiledSubAgent来传入：
+
+```python
+from deepagents import create_deep_agent, CompiledSubAgent
+from langchain.agents import create_agent
+
+# Create a custom agent graph
+custom_graph = create_agent(
+    model=your_model,
+    tools=specialized_tools,
+    prompt="You are a specialized agent for data analysis..."
+)
+
+# Use it as a custom subagent
+custom_subagent = CompiledSubAgent(
+    name="data-analyzer",
+    description="Specialized agent for complex data analysis tasks",
+    runnable=custom_graph
+)
+
+subagents = [custom_subagent]
+
+agent = create_deep_agent(
+    model="google_genai:gemini-3.5-flash",
+    tools=[internet_search],
+    system_prompt=research_instructions,
+    subagents=subagents
+)
+```
+
+也可以传入其他langgraph构建的图，只需要保证图的状态当中有message键即可。
 
 ### 1.3 核心价值
 
@@ -72,22 +552,17 @@ DeepAgents 对本项目的价值主要体现在三个方面。
 
 DeepAgents 内置 `write_todos` 规划工具，可以让 Agent 在执行前维护任务清单，并随着缺失章节、检索结果或用户补充要求调整计划。
 
-第三，上下文管理更稳定。官方 Context Engineering 文档把 context compression、文件 offloading、summarization 和 subagent isolation 都列为长任务上下文管理机制。
+第三，上下文管理更稳定。官方 Context Engineering 文档把 文件 offloading、summarization 和 subagent isolation 都列为长任务上下文管理机制。
 
 对研究场景来说，搜索结果、网页正文、事实卡片、引用来源和章节草稿都可能很长。如果全部放在消息历史里，模型容易遗漏章节、混淆来源，甚至把搜索摘要当事实。使用虚拟文件系统和子智能体隔离后，主智能体可以只接收整理后的结论和证据结构。
 
-可以把传统单 Agent 和 DeepAgents 多 Agent 的差别画成下面这样：
+本项目使用deepagents的架构：
 
 ```mermaid
 flowchart LR
-    subgraph Single[单 Agent 写法]
-        U1[用户任务] --> A1[一个 Agent]
-        A1 --> T1[所有工具]
-        T1 --> A1
-        A1 --> R1[一次性长输出]
-    end
 
-    subgraph Deep[DeepAgents 写法]
+
+    subgraph 调用架构
         U2[用户任务] --> M[主智能体]
         M --> P[Todo 计划]
         M --> S[检索子智能体]
@@ -99,134 +574,9 @@ flowchart LR
     end
 ```
 
-本项目采用 DeepAgents，不是为了追求“Agent 数量越多越好”，而是为了把研究链路中的不同风险隔离开：
-
-| 风险            | DeepAgents 能力             | 本项目落点                               |
-| ------------- | ------------------------- | ----------------------------------- |
-| 检索材料太长，挤占主上下文 | 子智能体上下文隔离、文件系统 offloading | 检索子智能体只返回来源、事实和冲突                   |
-| 长报告一次性输出容易漏章节 | todo 规划、逐章节工具调用           | 主智能体调用 `save_research_section` 保存每章 |
-| 工具结果和正文混在一起   | 虚拟文件系统和结构化输出              | 中间材料进 `/research/workspace/`，最终结果落库 |
-| 报告渲染阶段二次编造事实  | 职责边界                      | 渲染阶段只做确定性 HTML 转换                   |
-
-这些价值都依赖工程约束配合。DeepAgents 提供的是能力，不会自动保证来源可靠、章节完整或工具安全。因此后续章节会继续通过 Prompt、Pydantic 模型、工具校验和确定性渲染来收紧边界。
-
-### 1.4 编码示例
-
-下面的示例只用于说明 DeepAgents 的基础用法。正式项目代码会在后续章节中结合 `ResearchAgent` 、Prompt 文件、检索工具和保存工具展开。
-
-#### 1.4.1 构建子智能体示例
-
-官方 Subagents 文档说明，自定义子智能体通常通过字典配置，核心字段包括 `name`、`description`、`system_prompt`、`tools`，可选字段包括 `model`、`middleware`、`response_format`、`permissions` 等。主智能体会根据 `description` 判断什么时候通过 `task` 工具委托给子智能体。
-
-一个最小化的研究检索子智能体可以这样写：
-
-```python
-from deepagents import create_deep_agent
-
-
-def external_search(query: str, max_results: int = 5) -> dict:
-    """Search public web sources for a research question."""
-    return {
-        "query": query,
-        "results": [],
-    }
-
-
-search_subagent = {
-    "name": "search-agent",
-    "description": "负责公开互联网检索、网页读取、内部知识库检索和证据整理。",
-    "system_prompt": (
-        "你是信息检索智能体。只负责检索、读取、整理来源和抽取事实，"
-        "不要编写最终报告正文。输出必须包含 sources、fact_cards 和 conflicts。"
-    ),
-    "tools": [external_search],
-}
-
-manager_agent = create_deep_agent(
-    model="openai:gpt-5.4",
-    tools=[],
-    system_prompt="你是研究管理智能体，负责规划研究任务并委托检索子智能体。",
-    subagents=[search_subagent],
-    name="research-manager-agent",
-)
-```
-
-在真实项目中，`external_search` 会替换为 Tavily 搜索工具，子智能体还会拿到 `read_web_page` 和 `ragflow_search`。主智能体不会直接调用这些检索工具，而是通过子智能体完成证据收集，这样主上下文里保留的是整理后的事实结果，而不是所有网页正文和搜索过程。
-
-#### 1.4.2 使用文件系统示例
-
-DeepAgents 的文件系统能力用于管理长任务中的上下文。官方 Backends 文档说明，默认 backend 是线程级状态中的虚拟文件系统；文件会随同一个 thread 的 checkpoint 在多轮中保留，但不会跨 thread 共享。也可以显式使用 `FilesystemBackend`、`StoreBackend` 或 `CompositeBackend`。
-
-本项目更推荐把大输入作为初始文件传给 Agent，而不是直接放进消息正文：
-
-```python
-import json
-
-from deepagents import create_deep_agent
-from deepagents.backends.utils import create_file_data
-
-
-agent = create_deep_agent(
-    model="deepseek:deepseek-chat",
-    system_prompt="你是研究管理智能体。先读取任务文件，再规划研究步骤。",
-)
-
-task_payload = {
-    "task_name": "generate_report",
-    "project_id": "project-001",
-    "topic": "企业级 Deep Research 系统设计",
-    "required_section_ids": ["1", "2", "3"],
-}
-
-result = agent.invoke(
-    {
-        "messages": [
-            {
-                "role": "user",
-                "content": (
-                    "请读取 /research/task_payload.json，先使用 todo 规划步骤，"
-                    "中间材料写入 /research/workspace/，最终只返回严格 JSON。"
-                ),
-            }
-        ],
-        "files": {
-            "/research/task_payload.json": create_file_data(
-                json.dumps(task_payload, ensure_ascii=False, indent=2)
-            ),
-            "/research/workspace/README.md": create_file_data(
-                "该目录用于保存检索摘要、来源整理、事实卡片和章节草稿。"
-            ),
-        },
-    }
-)
-```
-
-如果需要接入真实磁盘，需要显式配置 backend，并谨慎处理权限：
-
-```python
-from deepagents import create_deep_agent
-from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
-
-
-agent = create_deep_agent(
-    model="deepseek:deepseek-chat",
-    backend=CompositeBackend(
-        default=StateBackend(),
-        routes={
-            "/workspace/": FilesystemBackend(
-                root_dir="/absolute/path/to/project-workspace",
-                virtual_mode=True,
-            ),
-        },
-    ),
-)
-```
-
-这里的设计含义是：Agent 内部临时材料仍走 `StateBackend`，只有 `/workspace/` 路径映射到指定本地目录。`virtual_mode=True` 用于把访问限制在 `root_dir` 之下。官方文档也提醒，本地文件系统访问可能读取敏感文件或造成不可逆修改，生产环境中应优先使用更受控的状态后端、存储后端、沙箱和权限规则。
-
 ## 2. Agent总设计
 
-当前项目中，仅在大纲制定环节和研究执行环节使用智能体。报告生成阶段不再额外构建“报告写作 Agent”，而是使用确定性的报告渲染工具，把已经落库的结构化研究结果转换成 HTML。
+当前项目中，仅在大纲制定环节和研究执行环节使用智能体。报告生成阶段暂不引入agent实现。
 
 整个 Agent 链路可以拆成两层：
 
@@ -235,14 +585,14 @@ agent = create_deep_agent(
 | 主智能体 | 研究管理智能体 | 理解研究任务、生成大纲、修改大纲、拆解章节、协调检索、整理事实和洞察、写出章节正文 |
 | 子智能体 | 信息检索智能体 | 围绕主智能体分派的问题进行公开搜索、网页读取、内部知识库检索和事实整理       |
 
-报告阶段的职责边界如下：
+各个阶段的职责边界如下：
 
-| 阶段         | 是否使用 LLM Agent      | 产物                                                |
-| ---------- | ------------------- | ------------------------------------------------- |
-| 生成研究任务书和大纲 | 使用研究管理智能体           | `research_brief`、`outline`                        |
-| 修改大纲       | 使用研究管理智能体           | 修订后的 `outline`                                    |
-| 执行研究       | 使用研究管理智能体 + 信息检索智能体 | `sections`、`sources`、`fact_cards`、`insight_cards` |
-| 渲染报告       | 不使用报告 Agent         | HTML、目录、引用、参考来源                                   |
+| 阶段         | 是否使用 LLM Agent             | 产物                                                |
+| ---------- | -------------------------- | ------------------------------------------------- |
+| 生成研究任务书和大纲 | 使用研究管理智能体                  | `research_brief`、`outline`                        |
+| 修改大纲       | 使用研究管理智能体                  | 修订后的 `outline`                                    |
+| 执行研究       | 使用研究管理智能体 + 信息检索智能体        | `sections`、`sources`、`fact_cards`、`insight_cards` |
+| 渲染报告       | 不使用agent，仅使用html渲染器对报告进行渲染 | HTML、目录、引用、参考来源                                   |
 
 这个设计的核心原因是：研究过程需要 LLM 进行理解、拆解、检索规划、归纳和写作；但报告渲染阶段主要是结构转换和页面展示，不应该让 LLM 重新补写事实、改写证据链或生成新的来源。
 
@@ -251,7 +601,7 @@ agent = create_deep_agent(
 ```mermaid
 flowchart TD
     后台任务[后台任务]
-    Agent门面[ResearchAgent 门面]
+    Agent门面[ResearchAgent]
     研究管理[研究管理智能体]
     信息检索[信息检索智能体]
     外部搜索[external_search]
