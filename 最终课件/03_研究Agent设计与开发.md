@@ -32,18 +32,19 @@ from langchain.agents import create_agent
 agent = create_agent(
     model="deepseek-chat",
     tools=[...],
+    system_prompt  ="",
 )
 ```
 
 机制如下所示：
 
-<img src="file:///C:/Users/m1881/AppData/Roaming/marktext/images/2026-06-12-16-59-04-image.png" title="" alt="" data-align="center">
+<img src="images/2026-06-12-16-59-04-image.png" title="" alt="" data-align="center">
 
 只有简单的model调用和tools之间的流转。
 
 而在此基础上，create_agent还为我们提供了middleware参数，从而可以通过middleware，来加强这个循环过程，如下所示：
 
-<img src="file:///C:/Users/m1881/AppData/Roaming/marktext/images/2026-06-12-17-00-57-image.png" title="" alt="" data-align="center">
+<img src="images/2026-06-12-17-00-57-image.png" title="" alt="" data-align="center">
 
 整个调用Agent的过程，可以在不改变model和tools的相关代码前提下，实现多处调整：
 
@@ -305,7 +306,7 @@ FileSystemMiddleware依赖文件系统后端来进行文件读写。文件系统
 
 有如下的文件系统后端：
 
-- StateBackend：存在Langgraph的Agent State中，在一次对话线程内持久，线程间不共享；该实现为默认实现，
+- StateBackend：存在Langgraph的Agent State中，在一次对话线程内持久，线程间不共享；该实现为默认实现。
 
 - FileSystemBackend: 直接读写真实磁盘文件系统、也可以设置虚拟化路径，将路径约束在指定目录下面；
 
