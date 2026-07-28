@@ -6,29 +6,33 @@
 <title>AI 研究报告工作台</title>
 <style>
   :root {
-    --primary: #4f46e5;
-    --primary-hover: #4338ca;
-    --bg: #f8fafc;
+    --primary: #176b5b;
+    --primary-hover: #115448;
+    --bg: #f3f5f4;
     --card-bg: #ffffff;
-    --text: #1e293b;
-    --text-muted: #64748b;
-    --border: #e2e8f0;
-    --success: #22c55e;
-    --warning: #f59e0b;
-    --danger: #ef4444;
-    --radius: 12px;
-    --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+    --text: #202624;
+    --text-muted: #68726e;
+    --border: #dce2df;
+    --success: #287a58;
+    --warning: #b7791f;
+    --danger: #c2413b;
+    --radius: 8px;
+    --shadow: 0 10px 30px rgba(25,39,34,.06);
   }
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; min-height: 100vh; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; min-height: 100vh; }
 
   /* Header */
-  header { background: var(--card-bg); border-bottom: 1px solid var(--border); padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
-  header .logo { font-size: 20px; font-weight: 700; color: var(--primary); }
-  header .version { font-size: 12px; color: var(--text-muted); background: var(--bg); padding: 2px 8px; border-radius: 99px; }
+  header { height: 64px; padding: 0 32px; display: flex; align-items: center; gap: 12px; background: rgba(255,255,255,.94); border-bottom: 1px solid var(--border); }
+  header .brand-mark { width: 10px; height: 28px; background: var(--primary); border-radius: 2px; }
+  header .logo { font-size: 18px; font-weight: 720; color: var(--text); }
+  header .version { padding: 2px 7px; color: var(--text-muted); background: var(--bg); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; }
+  header .header-actions { display: flex; align-items: center; margin-left: auto; }
 
   /* Layout */
-  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px; }
+  .container { max-width: 960px; margin: 0 auto; padding: 32px 24px 56px; transition: max-width .2s ease; }
+  body.report-mode .container { max-width: 1240px; }
+  body.report-mode .steps { max-width: 912px; margin-left: auto; margin-right: auto; }
 
   /* Steps indicator */
   .steps { display: flex; gap: 0; margin-bottom: 32px; }
@@ -48,7 +52,7 @@
   .form-group { margin-bottom: 20px; }
   .form-group label { display: block; font-weight: 600; font-size: 14px; margin-bottom: 6px; }
   .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; font-family: inherit; transition: border-color .2s; background: var(--bg); }
-  .form-group input:focus, .form-group textarea:focus, .form-group select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(79,70,229,.1); }
+  .form-group input:focus, .form-group textarea:focus, .form-group select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(23,107,91,.12); }
   .form-group textarea { resize: vertical; min-height: 80px; }
   .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 
@@ -60,7 +64,7 @@
   .btn-secondary { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
   .btn-secondary:hover { background: var(--border); }
   .btn-success { background: var(--success); color: white; }
-  .btn-success:hover { background: #16a34a; }
+  .btn-success:hover { background: #1f6548; }
   .btn-danger { background: var(--danger); color: white; }
   .btn-danger:hover { background: #dc2626; }
   .btn-sm { padding: 6px 14px; font-size: 13px; }
@@ -85,8 +89,15 @@
   .outline-node .node-desc { color: var(--text-muted); font-size: 13px; margin-top: 2px; }
   .outline-node .node-children { margin-left: 24px; margin-top: 8px; }
 
-  /* Report */
-  .report-frame { width: 100%; min-height: 500px; border: 1px solid var(--border); border-radius: var(--radius); background: white; padding: 24px; overflow-x: auto; }
+  /* Report reader */
+  .report-view { margin-bottom: 24px; }
+  .report-toolbar { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 14px 18px 14px 22px; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius) var(--radius) 0 0; }
+  .report-heading { min-width: 0; }
+  .report-kicker { color: var(--primary); font-size: 12px; font-weight: 700; }
+  .report-heading h2 { margin: 2px 0 0; font-size: 18px; line-height: 1.35; overflow-wrap: anywhere; }
+  .report-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+  .report-source-count { color: var(--text-muted); font-size: 13px; white-space: nowrap; }
+  .report-frame { display: block; width: 100%; height: clamp(680px, calc(100dvh - 176px), 980px); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); background: #eef1ef; box-shadow: var(--shadow); }
 
   /* Messages */
   .msg { padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
@@ -106,13 +117,36 @@
   .gap-8 { gap: 8px; }
   .flex { display: flex; }
   .flex-wrap { flex-wrap: wrap; }
+
+  @media (max-width: 720px) {
+    header { height: 56px; padding: 0 18px; }
+    header .logo { font-size: 16px; }
+    header .version { display: none; }
+    header .header-actions .btn { padding: 7px 10px; }
+    .container { padding: 20px 14px 40px; }
+    .steps { margin-bottom: 20px; overflow-x: auto; }
+    .step { min-width: 76px; padding: 8px 4px; font-size: 11px; }
+    .step::after { display: none; }
+    .card { padding: 22px 18px; }
+    .form-row { grid-template-columns: 1fr; gap: 0; }
+    .report-toolbar { align-items: flex-start; gap: 12px; padding: 13px 14px; }
+    .report-actions { gap: 6px; }
+    .report-source-count { display: none; }
+    .report-frame { height: calc(100dvh - 128px); min-height: 560px; }
+  }
 </style>
 </head>
 <body>
 
 <header>
-  <span class="logo">🔬 AI 研究报告工作台</span>
+  <span class="brand-mark" aria-hidden="true"></span>
+  <span class="logo">AI 研究报告工作台</span>
   <span class="version">v0.1</span>
+  <div class="header-actions">
+    <button class="btn btn-secondary btn-sm" id="btnLatestReport" type="button">
+      查看最新报告
+    </button>
+  </div>
 </header>
 
 <div class="container">
@@ -128,7 +162,7 @@
 
   <!-- Step 1: Create Project -->
   <div class="card" id="section-create">
-    <h2>📝 创建研究项目</h2>
+    <h2>创建研究项目</h2>
     <p class="subtitle">填写研究主题和基础设定，系统将自动生成研究大纲</p>
     <form id="createForm">
       <div class="form-group">
@@ -164,7 +198,7 @@
         <label>年数</label>
         <input type="number" id="years" value="3" min="1" max="20">
       </div>
-      <button type="submit" class="btn btn-primary" id="btnCreate">🚀 创建项目</button>
+      <button type="submit" class="btn btn-primary" id="btnCreate">创建项目</button>
     </form>
   </div>
 
@@ -178,12 +212,12 @@
 
   <!-- Section: Outline Ready -->
   <div class="card hidden" id="section-outline">
-    <h2>📋 研究大纲</h2>
+    <h2>研究大纲</h2>
     <p class="subtitle">请审阅自动生成的研究大纲，确认或提交修改意见</p>
     <div id="outlineContent"></div>
     <div class="flex gap-8 mt-24">
-      <button class="btn btn-success" id="btnConfirm">✅ 确认大纲</button>
-      <button class="btn btn-secondary" id="btnRevise">✏️ 修改大纲</button>
+      <button class="btn btn-success" id="btnConfirm">确认大纲</button>
+      <button class="btn btn-secondary" id="btnRevise">修改大纲</button>
     </div>
     <div class="revision-box hidden" id="revisionBox">
       <div class="form-group">
@@ -203,9 +237,9 @@
 
   <!-- Section: Outline Confirmed -->
   <div class="card hidden text-center" id="section-outline-confirmed">
-    <h2>✅ 大纲已确认</h2>
+    <h2>大纲已确认</h2>
     <p class="text-muted mt-16">大纲已确认，现在可以生成研究报告了</p>
-    <button class="btn btn-primary mt-24" id="btnGenerateReport">📄 生成研究报告</button>
+    <button class="btn btn-primary mt-24" id="btnGenerateReport">生成研究报告</button>
     <div class="hidden mt-24" id="reportInstructionBox">
       <div class="form-group">
         <label>补充要求（可选）</label>
@@ -224,24 +258,36 @@
   </div>
 
   <!-- Section: Report Ready -->
-  <div class="card hidden" id="section-report">
-    <h2>📄 研究报告</h2>
-    <p class="subtitle" id="reportTitle"></p>
-    <div class="report-frame" id="reportContent"></div>
-    <div class="mt-24" id="reportSources"></div>
+  <div class="report-view hidden" id="section-report">
+    <div class="report-toolbar">
+      <div class="report-heading">
+        <div class="report-kicker">研究报告</div>
+        <h2 id="reportTitle">研究报告</h2>
+      </div>
+      <div class="report-actions">
+        <span class="report-source-count" id="reportSourceCount"></span>
+        <button class="btn btn-secondary btn-sm" id="btnPrintReport" type="button">打印</button>
+      </div>
+    </div>
+    <iframe
+      class="report-frame"
+      id="reportContent"
+      title="研究报告正文"
+      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+    ></iframe>
   </div>
 
   <!-- Error / Reset -->
   <div class="card hidden text-center" id="section-error">
-    <h2>⚠️ 出错了</h2>
+    <h2>出错了</h2>
     <p class="text-muted mt-16" id="errorMessage"></p>
-    <button class="btn btn-primary mt-24" onclick="location.reload()">🔄 重新开始</button>
+    <button class="btn btn-primary mt-24" onclick="location.reload()">重新开始</button>
   </div>
 
   <!-- Debug Info -->
   <div class="card hidden" id="section-debug" style="opacity:0.6;">
     <details>
-      <summary style="cursor:pointer;font-size:13px;color:var(--text-muted);">🔧 调试信息</summary>
+      <summary style="cursor:pointer;font-size:13px;color:var(--text-muted);">调试信息</summary>
       <pre id="debugInfo" style="font-size:12px;margin-top:8px;white-space:pre-wrap;"></pre>
     </details>
   </div>
@@ -265,6 +311,7 @@ function resolveApiBase() {
 }
 
 const API = resolveApiBase() + '/api/v1';
+const DEBUG_ENABLED = new URLSearchParams(window.location.search).get('debug') === '1';
 
 // ============================================================
 // State
@@ -275,6 +322,7 @@ const state = {
   status: null,       // project status
   outline: null,
   report: null,
+  reportUrl: null,
   polling: null,      // interval id
 };
 
@@ -287,8 +335,10 @@ function show(...ids) { ids.forEach(id => $(id).classList.remove('hidden')); }
 function hide(...ids) { ids.forEach(id => $(id).classList.add('hidden')); }
 
 function debug(msg, data) {
-  show('section-debug');
-  $('debugInfo').textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n` + (data ? JSON.stringify(data, null, 2) + '\n' : '');
+  if (DEBUG_ENABLED) {
+    show('section-debug');
+    $('debugInfo').textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n` + (data ? JSON.stringify(data, null, 2) + '\n' : '');
+  }
   console.log(msg, data);
 }
 
@@ -421,14 +471,14 @@ $('createForm').addEventListener('submit', async function(e) {
       // onFailed
       (task) => { showError('大纲生成失败: ' + task.message); },
       // statusCallback
-      (task) => { $('waitingOutlineStatus').textContent = '状态: ' + formatStatus(task.status) + ' — ' + (task.message || ''); }
+      (task) => { $('waitingOutlineStatus').textContent = '状态: ' + formatStatus(task.status) + ' · ' + (task.message || ''); }
     );
 
   } catch (e) {
     showError('创建项目失败: ' + e.message);
   } finally {
     $('btnCreate').disabled = false;
-    $('btnCreate').textContent = '🚀 创建项目';
+    $('btnCreate').textContent = '创建项目';
   }
 });
 
@@ -462,7 +512,7 @@ function renderOutline(nodes) {
   function renderNode(n) {
     let html = `<div class="outline-node">
       <div class="node-title">${esc(n.title)}</div>
-      <div class="node-question">❓ ${esc(n.question)}</div>
+      <div class="node-question">${esc(n.question)}</div>
       <div class="node-desc">${esc(n.description)}</div>`;
     if (n.children && n.children.length > 0) {
       html += '<div class="node-children">';
@@ -530,7 +580,7 @@ $('btnSubmitRevision').addEventListener('click', async function() {
       state.taskId,
       async () => { await loadAndShowOutline(); },
       (task) => { showError('大纲修改失败: ' + task.message); },
-      (task) => { $('waitingRevisionStatus').textContent = '状态: ' + formatStatus(task.status) + ' — ' + (task.message || ''); }
+      (task) => { $('waitingRevisionStatus').textContent = '状态: ' + formatStatus(task.status) + ' · ' + (task.message || ''); }
     );
 
   } catch (e) {
@@ -563,7 +613,7 @@ $('btnSubmitReport').addEventListener('click', async function() {
       state.taskId,
       async () => { await loadAndShowReport(); },
       (task) => { showError('报告生成失败: ' + task.message); },
-      (task) => { $('waitingReportStatus').textContent = '状态: ' + formatStatus(task.status) + ' — ' + (task.message || ''); }
+      (task) => { $('waitingReportStatus').textContent = '状态: ' + formatStatus(task.status) + ' · ' + (task.message || ''); }
     );
 
   } catch (e) {
@@ -577,34 +627,137 @@ $('btnSubmitReport').addEventListener('click', async function() {
 async function loadAndShowReport() {
   try {
     const data = await api('GET', `/research-projects/${state.projectId}/reports/latest`);
-    state.report = data;
-
-    hide('section-waiting-report');
-    show('section-report');
-    setStep(5);
-
-    $('reportTitle').textContent = data.title || '研究报告';
-    $('reportContent').innerHTML = data.html || '<p>报告内容为空</p>';
-
-    // Render sources
-    if (data.sources && data.sources.length > 0) {
-      let srcHtml = '<h3>📚 参考来源</h3><ul style="padding-left:20px;">';
-      data.sources.forEach(s => {
-        const title = s.title || '未知来源';
-        if (s.url) {
-          srcHtml += `<li><a href="${esc(s.url)}" target="_blank">${esc(title)}</a> <span class="text-muted">(${esc(s.source_type)})</span></li>`;
-        } else {
-          srcHtml += `<li>${esc(title)} <span class="text-muted">(${esc(s.source_type)})</span></li>`;
-        }
-      });
-      srcHtml += '</ul>';
-      $('reportSources').innerHTML = srcHtml;
-    }
-
+    showReport(data);
   } catch (e) {
     showError('获取报告失败: ' + e.message);
   }
 }
+
+function showReport(data) {
+  state.projectId = data.project_id;
+  state.report = data;
+
+  hide('section-create', 'section-waiting-outline', 'section-outline',
+       'section-waiting-revision', 'section-outline-confirmed',
+       'section-waiting-report', 'section-error');
+  show('section-report');
+  setStep(5);
+  document.body.classList.add('report-mode');
+
+  $('reportTitle').textContent = data.title || '研究报告';
+  const sourceCount = Array.isArray(data.sources) ? data.sources.length : 0;
+  $('reportSourceCount').textContent = sourceCount ? `${sourceCount} 个参考来源` : '暂无参考来源';
+  const reportHtml = data.html || '<!doctype html><html lang="zh-CN"><body><p>报告内容为空</p></body></html>';
+  const preparedHtml = prepareReportHtml(reportHtml);
+  if (state.reportUrl) URL.revokeObjectURL(state.reportUrl);
+  state.reportUrl = URL.createObjectURL(new Blob([preparedHtml], { type: 'text/html' }));
+  $('reportContent').src = state.reportUrl;
+}
+
+function prepareReportHtml(reportHtml) {
+  const reportDocument = new DOMParser().parseFromString(reportHtml, 'text/html');
+  const referenceList = reportDocument.querySelector('.references ol');
+  if (!referenceList) return reportHtml;
+
+  const missingTargets = new Set();
+  reportDocument.querySelectorAll('a[href^="#ref-"]').forEach(anchor => {
+    let targetId;
+    try {
+      targetId = decodeURIComponent(anchor.getAttribute('href').slice(1));
+    } catch {
+      return;
+    }
+    if (!reportDocument.getElementById(targetId)) {
+      missingTargets.add(targetId);
+    }
+  });
+
+  missingTargets.forEach(targetId => {
+    const sourceId = targetId.replace(/^ref-/, '');
+    const item = reportDocument.createElement('li');
+    item.id = targetId;
+    item.className = 'reference-missing';
+    item.textContent = `来源详情缺失（${sourceId}）`;
+    referenceList.appendChild(item);
+  });
+
+  if (missingTargets.size) {
+    const style = reportDocument.createElement('style');
+    style.textContent = `
+      .references li.reference-missing {
+        color: #8a5a16;
+        background: #fff8e8;
+      }
+    `;
+    reportDocument.head.appendChild(style);
+  }
+
+  return '<!doctype html>' + reportDocument.documentElement.outerHTML;
+}
+
+$('btnLatestReport').addEventListener('click', async function() {
+  const button = this;
+  button.disabled = true;
+  button.textContent = '正在加载...';
+  try {
+    const data = await api('GET', '/reports/latest');
+    showReport(data);
+  } catch (e) {
+    alert('获取最新报告失败: ' + e.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = '查看最新报告';
+  }
+});
+
+function bindReportAnchorNavigation() {
+  const frame = $('reportContent');
+  const reportDocument = frame.contentDocument;
+  if (!reportDocument) return;
+
+  const highlightStyle = reportDocument.createElement('style');
+  highlightStyle.textContent = `
+    .references li.report-anchor-highlight {
+      background: #fff8e8;
+      outline: 2px solid #d19a3f;
+      outline-offset: 3px;
+    }
+  `;
+  reportDocument.head.appendChild(highlightStyle);
+
+  reportDocument.addEventListener('click', function(event) {
+    const eventTarget = event.target;
+    if (!eventTarget || typeof eventTarget.closest !== 'function') return;
+
+    const anchor = eventTarget.closest('a[href^="#"]');
+    if (!anchor) return;
+
+    let targetId;
+    try {
+      targetId = decodeURIComponent(anchor.getAttribute('href').slice(1));
+    } catch {
+      return;
+    }
+    const target = reportDocument.getElementById(targetId);
+    if (!target) return;
+
+    event.preventDefault();
+    reportDocument.querySelectorAll('.report-anchor-highlight').forEach(element => {
+      element.classList.remove('report-anchor-highlight');
+    });
+    if (target.matches('.references li')) {
+      target.classList.add('report-anchor-highlight');
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+}
+
+$('reportContent').addEventListener('load', bindReportAnchorNavigation);
+
+$('btnPrintReport').addEventListener('click', function() {
+  const reportWindow = $('reportContent').contentWindow;
+  if (reportWindow) reportWindow.print();
+});
 
 // ============================================================
 // Init
@@ -619,6 +772,10 @@ document.addEventListener('keydown', function(e) {
     const vis = document.querySelector('input:not(.hidden):not([type="hidden"])');
     if (vis) vis.focus();
   }
+});
+
+window.addEventListener('beforeunload', function() {
+  if (state.reportUrl) URL.revokeObjectURL(state.reportUrl);
 });
 </script>
 

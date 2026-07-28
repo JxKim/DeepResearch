@@ -71,7 +71,7 @@ def start_render_report_task(
     """启动独立报告渲染后台任务。
 
     输入为研究项目编号、后台任务编号和可选展示要求；该任务只读取已落库的
-    research_result 并生成 HTML 报告版本，不重新执行研究。
+    sections/sources 并生成 HTML 报告版本，不重新执行研究。
     """
 
     _send_task(
@@ -238,23 +238,18 @@ async def run_generate_report_task(
             outline=outline,
             user_instruction=user_instruction,
         )
-        await research_project_repository.save_research_result(
-            project_id=project_id,
-            research_result=research_result,
-        )
         logger.info(
-            "研究结果已保存，project_id={}，task_id={}，sections={}",
+            "研究章节已完成，project_id={}，task_id={}，sections={}",
             project_id,
             task_id,
             len(research_result.sections),
         )
 
-        project_with_research_result = await research_project_repository.get_project(
+        project_after_research = await research_project_repository.get_project(
             project_id=project_id
         )
         result = await research_agent.generate_report(
-            project=project_with_research_result,
-            outline=outline,
+            project=project_after_research,
             user_instruction=user_instruction,
         )
         await report_repository.save_report_version(
@@ -289,8 +284,8 @@ async def run_render_report_task(
 ) -> None:
     """执行独立报告渲染任务。
 
-    输入为项目编号、任务编号和可选展示要求；执行过程只读取已保存的 research_result，
-    调用确定性报告渲染流程生成 HTML 并保存报告版本，不触发主研究智能体。
+    输入为项目编号、任务编号和可选展示要求；执行过程只读取已保存的 sections/sources，
+    临时组装渲染输入生成 HTML 并保存报告版本，不触发主研究智能体。
     """
 
     try:
@@ -301,14 +296,12 @@ async def run_render_report_task(
         logger.info("开始独立渲染报告，project_id={}，task_id={}", project_id, task_id)
 
         project = await research_project_repository.get_project(project_id=project_id)
-        if not isinstance(project, dict) or not project.get("research_result"):
-            raise ValueError("项目缺少已落库的 research_result，无法直接渲染报告")
+        if not isinstance(project, dict) or not project.get("sections"):
+            raise ValueError("项目缺少已保存的研究章节，无法直接渲染报告")
 
-        outline = await research_project_repository.get_confirmed_outline(project_id=project_id)
         research_agent = get_research_agent()
         result = await research_agent.generate_report(
             project=project,
-            outline=outline,
             user_instruction=user_instruction,
         )
         await report_repository.save_report_version(

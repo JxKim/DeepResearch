@@ -11,6 +11,15 @@ PLACEHOLDER_MARKERS = [
     "真实内容将在",
     "尚未接入真实",
 ]
+CONFIDENCE_VALUES = {"high", "medium", "low"}
+RISK_TYPES = {
+    "evidence_gap",
+    "source_conflict",
+    "stale_data",
+    "uncertainty",
+    "execution_risk",
+}
+SEVERITY_VALUES = {"high", "medium", "low"}
 
 
 async def save_research_section(project_id: str, section: dict[str, Any]) -> dict[str, Any]:
@@ -25,10 +34,7 @@ async def save_research_section(project_id: str, section: dict[str, Any]) -> dic
     if errors:
         return {"ok": False, "errors": errors}
 
-    normalized_sources = await _normalize_section_sources(
-        project_id=project_id,
-        section=section,
-    )
+    normalized_sources = _normalize_sources(section.get("sources"))
     normalized_section = _normalize_section(section, sources=normalized_sources)
     await research_project_repository.upsert_research_section(
         project_id=project_id,
@@ -43,7 +49,7 @@ async def save_research_section(project_id: str, section: dict[str, Any]) -> dic
         "ok": True,
         "project_id": project_id,
         "section_id": normalized_section["section_id"],
-        "sources_saved": len(normalized_sources),
+        "sources_merged": len(normalized_sources),
         "message": "research section saved",
     }
 
@@ -61,17 +67,15 @@ async def _validate_section(project_id: str, section: dict[str, Any]) -> list[st
     title = _clean_text(section.get("title"))
     body = _clean_text(section.get("body"))
     key_findings = section.get("key_findings")
-    evidence_chain = section.get("evidence_chain")
     risks = section.get("risks")
     incoming_sources = _normalize_sources(section.get("sources"))
-    existing_sources = project.get("sources") if isinstance(project, dict) else []
-    normalized_existing_sources = _normalize_sources(existing_sources)
-    known_source_ids = _source_ids(incoming_sources) | _source_ids(existing_sources)
-    referenced_source_ids: set[str] = set()
+    known_source_ids = _source_ids(incoming_sources)
+    referenced_source_ids = _referenced_source_ids_from_section(section)
+    outline_nodes = project.get("confirmed_outline") or project.get("outline") or []
 
     if not section_id:
         errors.append("section.section_id 不能为空")
-    elif section_id not in _outline_node_ids(project.get("confirmed_outline") or project.get("outline") or []):
+    elif section_id not in _outline_node_ids(outline_nodes):
         errors.append(f"section.section_id 不在已确认大纲中: {section_id}")
     if not title:
         errors.append("section.title 不能为空")
@@ -79,26 +83,22 @@ async def _validate_section(project_id: str, section: dict[str, Any]) -> list[st
         errors.append("section.body 必须是完整章节正文，长度至少 120 字符")
     if _contains_placeholder(body):
         errors.append("section.body 包含占位或待补充文案")
-    if not isinstance(key_findings, list) or not any(_clean_text(item) for item in key_findings):
+    if not isinstance(key_findings, list) or not key_findings:
         errors.append("section.key_findings 至少需要 1 条非空关键发现")
-    if not isinstance(evidence_chain, list) or not evidence_chain:
-        errors.append("section.evidence_chain 至少需要 1 条证据链")
     else:
-        for index, item in enumerate(evidence_chain, start=1):
+        for index, item in enumerate(key_findings, start=1):
             if not isinstance(item, dict):
-                errors.append(f"section.evidence_chain[{index}] 必须是对象")
+                errors.append(f"section.key_findings[{index}] 必须是对象")
                 continue
-            if not _clean_text(item.get("claim")):
-                errors.append(f"section.evidence_chain[{index}].claim 不能为空")
-            if _contains_placeholder(_clean_text(item.get("claim"))):
-                errors.append(f"section.evidence_chain[{index}].claim 包含占位文案")
-            referenced_source_ids.update(
-                _clean_text(source_id)
-                for source_id in _ensure_list(item.get("source_ids"))
-                if _clean_text(source_id)
-            )
+            claim = _clean_text(item.get("claim") or item.get("summary") or item.get("title"))
+            if not claim:
+                errors.append(f"section.key_findings[{index}].claim 不能为空")
+            if _contains_placeholder(claim):
+                errors.append(f"section.key_findings[{index}].claim 包含占位文案")
+            if not _clean_string_list(item.get("source_ids")):
+                errors.append(f"section.key_findings[{index}].source_ids 至少需要 1 个来源引用")
     if referenced_source_ids and not incoming_sources and not known_source_ids:
-        errors.append("section.sources 必须包含 evidence_chain.source_ids 对应的来源详情")
+        errors.append("section.sources 必须包含 key_findings/risks 引用到的来源详情")
     missing_source_ids = referenced_source_ids - known_source_ids
     if missing_source_ids:
         errors.append(
@@ -107,21 +107,31 @@ async def _validate_section(project_id: str, section: dict[str, Any]) -> list[st
         )
     sources_by_id = {
         source["source_id"]: source
-        for source in [*normalized_existing_sources, *incoming_sources]
+        for source in incoming_sources
         if source.get("source_id")
     }
     for index, source in enumerate(incoming_sources, start=1):
         source_id = source.get("source_id") or f"第 {index} 个来源"
         if _source_requires_url(source) and not _is_http_url(source.get("url")):
-            errors.append(f"section.sources[{source_id}].url 不能为空，公开来源必须提供 http(s) URL")
+            errors.append(
+                f"section.sources[{source_id}].url 不能为空，公开来源必须提供 http(s) URL"
+            )
     for source_id in sorted(referenced_source_ids):
         source = sources_by_id.get(source_id)
         if source and _source_requires_url(source) and not _is_http_url(source.get("url")):
-            errors.append(f"evidence_chain 引用的公开来源 {source_id} 缺少 http(s) URL")
+            errors.append(f"章节引用的公开来源 {source_id} 缺少 http(s) URL")
     if isinstance(risks, list):
         for index, risk in enumerate(risks, start=1):
-            if _contains_placeholder(_clean_text(risk)):
-                errors.append(f"section.risks[{index}] 包含占位文案")
+            if not isinstance(risk, dict):
+                errors.append(f"section.risks[{index}] 必须是对象")
+                continue
+            description = _clean_text(
+                risk.get("description") or risk.get("summary") or risk.get("title")
+            )
+            if not description:
+                errors.append(f"section.risks[{index}].description 不能为空")
+            if _contains_placeholder(description):
+                errors.append(f"section.risks[{index}].description 包含占位文案")
     elif risks is not None:
         errors.append("section.risks 必须是数组")
 
@@ -137,71 +147,12 @@ def _normalize_section(
         "title": _clean_text(section.get("title")),
         "summary": _clean_text(section.get("summary")) or None,
         "body": _clean_text(section.get("body")),
-        "key_findings": [
-            _clean_text(item) for item in _ensure_list(section.get("key_findings")) if _clean_text(item)
-        ],
-        "evidence_chain": [
-            _normalize_evidence_item(item)
-            for item in _ensure_list(section.get("evidence_chain"))
-            if isinstance(item, dict)
-        ],
+        "key_findings": _normalize_key_findings(section.get("key_findings")),
         "sources": sources if sources is not None else _normalize_sources(section.get("sources")),
         "tables": [item for item in _ensure_list(section.get("tables")) if isinstance(item, dict)],
         "charts": [item for item in _ensure_list(section.get("charts")) if isinstance(item, dict)],
-        "risks": [_clean_text(item) for item in _ensure_list(section.get("risks")) if _clean_text(item)],
+        "risks": _normalize_risks(section.get("risks")),
     }
-
-
-def _normalize_evidence_item(item: dict[str, Any]) -> dict[str, Any]:
-    confidence = _clean_text(item.get("confidence")) or "medium"
-    if confidence not in {"high", "medium", "low"}:
-        confidence = "medium"
-    return {
-        "claim": _clean_text(item.get("claim")),
-        "fact_ids": [_clean_text(value) for value in _ensure_list(item.get("fact_ids")) if _clean_text(value)],
-        "source_ids": [
-            _clean_text(value) for value in _ensure_list(item.get("source_ids")) if _clean_text(value)
-        ],
-        "confidence": confidence,
-    }
-
-
-async def _normalize_section_sources(
-    project_id: str,
-    section: dict[str, Any],
-) -> list[dict[str, Any]]:
-    incoming_sources = _normalize_sources(section.get("sources"))
-    referenced_source_ids = _referenced_source_ids(section.get("evidence_chain"))
-    if not referenced_source_ids:
-        return incoming_sources
-
-    sources_by_id = {
-        source["source_id"]: source
-        for source in incoming_sources
-        if source.get("source_id")
-    }
-    missing_source_ids = referenced_source_ids - set(sources_by_id)
-    if not missing_source_ids:
-        return incoming_sources
-
-    project = await research_project_repository.get_project(project_id=project_id)
-    if not isinstance(project, dict):
-        return incoming_sources
-    existing_sources = _normalize_sources(project.get("sources"))
-    for source in existing_sources:
-        source_id = source.get("source_id")
-        if source_id in missing_source_ids:
-            sources_by_id[source_id] = source
-
-    ordered_sources: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for source in [*incoming_sources, *existing_sources]:
-        source_id = source.get("source_id")
-        if not source_id or source_id not in sources_by_id or source_id in seen:
-            continue
-        seen.add(source_id)
-        ordered_sources.append(sources_by_id[source_id])
-    return ordered_sources
 
 
 def _normalize_sources(value: Any) -> list[dict[str, Any]]:
@@ -209,7 +160,11 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
     for index, item in enumerate(_ensure_list(value), start=1):
         if not isinstance(item, dict):
             continue
-        source_id = _clean_text(item.get("source_id")) or _clean_text(item.get("id")) or f"source-{index}"
+        source_id = (
+            _clean_text(item.get("source_id"))
+            or _clean_text(item.get("id"))
+            or f"source-{index}"
+        )
         title = _clean_text(item.get("title"))
         source_type = _clean_text(item.get("source_type")) or "unknown"
         url = _clean_text(item.get("url")) or None
@@ -230,9 +185,61 @@ def _normalize_sources(value: Any) -> list[dict[str, Any]]:
     return sources
 
 
-def _referenced_source_ids(evidence_chain: Any) -> set[str]:
+def _normalize_key_findings(value: Any) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for index, item in enumerate(_ensure_list(value), start=1):
+        if not isinstance(item, dict):
+            continue
+        claim = _clean_text(item.get("claim") or item.get("summary") or item.get("title"))
+        if not claim:
+            continue
+        findings.append(
+            {
+                "finding_id": _clean_text(item.get("finding_id")) or f"finding-{index}",
+                "claim": claim,
+                "source_ids": _clean_string_list(item.get("source_ids")),
+                "confidence": _normalize_choice(
+                    item.get("confidence"),
+                    CONFIDENCE_VALUES,
+                    "medium",
+                ),
+            }
+        )
+    return findings
+
+
+def _normalize_risks(value: Any) -> list[dict[str, Any]]:
+    risks: list[dict[str, Any]] = []
+    for index, item in enumerate(_ensure_list(value), start=1):
+        if not isinstance(item, dict):
+            continue
+        description = _clean_text(
+            item.get("description") or item.get("summary") or item.get("title")
+        )
+        if not description:
+            continue
+        risks.append(
+            {
+                "risk_id": _clean_text(item.get("risk_id")) or f"risk-{index}",
+                "description": description,
+                "source_ids": _clean_string_list(item.get("source_ids")),
+                "risk_type": _normalize_choice(item.get("risk_type"), RISK_TYPES, "uncertainty"),
+                "severity": _normalize_choice(item.get("severity"), SEVERITY_VALUES, "medium"),
+            }
+        )
+    return risks
+
+
+def _referenced_source_ids_from_section(section: dict[str, Any]) -> set[str]:
     source_ids: set[str] = set()
-    for item in _ensure_list(evidence_chain):
+    source_ids.update(_referenced_source_ids(section.get("key_findings")))
+    source_ids.update(_referenced_source_ids(section.get("risks")))
+    return source_ids
+
+
+def _referenced_source_ids(items: Any) -> set[str]:
+    source_ids: set[str] = set()
+    for item in _ensure_list(items):
         if not isinstance(item, dict):
             continue
         source_ids.update(
@@ -282,6 +289,15 @@ def _contains_placeholder(text: str) -> bool:
 
 def _ensure_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _clean_string_list(value: Any) -> list[str]:
+    return [_clean_text(item) for item in _ensure_list(value) if _clean_text(item)]
+
+
+def _normalize_choice(value: Any, allowed: set[str], fallback: str) -> str:
+    text = _clean_text(value).lower()
+    return text if text in allowed else fallback
 
 
 def _clean_text(value: Any) -> str:

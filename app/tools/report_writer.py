@@ -11,7 +11,6 @@ SUPPORTED_BLOCK_TYPES = [
     "summary",
     "section",
     "key_findings",
-    "evidence_chain",
     "table",
     "chart_placeholder",
     "risk_notes",
@@ -41,7 +40,7 @@ async def get_report_render_schema() -> dict[str, Any]:
                 "新增事实",
                 "新增来源",
                 "新增结论",
-                "改写证据链",
+                "改写事实引用",
                 "调用搜索工具",
             ],
         },
@@ -61,18 +60,25 @@ async def get_report_render_schema() -> dict[str, Any]:
                     "title": "str",
                     "summary": "str | None",
                     "body": "str",
-                    "key_findings": ["str"],
-                    "evidence_chain": [
+                    "key_findings": [
                         {
+                            "finding_id": "str",
                             "claim": "str",
-                            "fact_ids": ["str"],
                             "source_ids": ["str"],
                             "confidence": "high | medium | low",
                         }
                     ],
                     "tables": ["dict"],
                     "charts": ["dict"],
-                    "risks": ["str"],
+                    "risks": [
+                        {
+                            "risk_id": "str",
+                            "description": "str",
+                            "source_ids": ["str"],
+                            "risk_type": "str",
+                            "severity": "high | medium | low",
+                        }
+                    ],
                 }
             ],
             "sources": [
@@ -175,7 +181,11 @@ async def write_html_report(
 
 def _normalize_research_result(research_result: dict[str, Any]) -> dict[str, Any]:
     title = _normalize_text(str(research_result.get("title") or DEFAULT_TITLE))
-    synthesis = research_result.get("synthesis") if isinstance(research_result.get("synthesis"), dict) else {}
+    synthesis = (
+        research_result.get("synthesis")
+        if isinstance(research_result.get("synthesis"), dict)
+        else {}
+    )
     executive_summary = (
         _optional_text(research_result.get("executive_summary"))
         or _optional_text(synthesis.get("executive_summary"))
@@ -232,38 +242,101 @@ def _normalize_layout_plan(layout_plan: dict[str, Any] | None) -> dict[str, Any]
 
 
 def _normalize_section(section: dict[str, Any], index: int) -> dict[str, Any]:
-    section_id = _normalize_text(str(section.get("section_id") or section.get("node_id") or index + 1))
+    section_id = _normalize_text(
+        str(section.get("section_id") or section.get("node_id") or index + 1)
+    )
     title = _normalize_text(str(section.get("title") or f"章节 {index + 1}"))
-    body = str(section.get("body") or section.get("content") or section.get("description") or "").strip()
+    body = str(
+        section.get("body")
+        or section.get("content")
+        or section.get("description")
+        or ""
+    ).strip()
     return {
         "section_id": section_id,
         "title": title,
         "summary": _optional_text(section.get("summary")),
         "body": body or "本章节尚未提供正文内容。",
-        "key_findings": [_normalize_text(str(item)) for item in _ensure_list(section.get("key_findings"))],
-        "evidence_chain": [
-            _normalize_evidence(item, evidence_index)
-            for evidence_index, item in enumerate(_ensure_list(section.get("evidence_chain")))
-            if isinstance(item, dict)
-        ],
+        "key_findings": _normalize_key_findings(section.get("key_findings")),
         "tables": [item for item in _ensure_list(section.get("tables")) if isinstance(item, dict)],
         "charts": [item for item in _ensure_list(section.get("charts")) if isinstance(item, dict)],
-        "risks": [_normalize_text(str(item)) for item in _ensure_list(section.get("risks"))],
+        "risks": _normalize_risks(section.get("risks")),
     }
 
 
-def _normalize_evidence(evidence: dict[str, Any], index: int) -> dict[str, Any]:
-    return {
-        "claim": _normalize_text(str(evidence.get("claim") or f"证据链 {index + 1}")),
-        "fact_ids": [str(item) for item in _ensure_list(evidence.get("fact_ids"))],
-        "source_ids": [str(item) for item in _ensure_list(evidence.get("source_ids"))],
-        "confidence": _normalize_text(str(evidence.get("confidence") or "medium")).lower(),
-    }
+def _normalize_key_findings(value: Any) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    for index, item in enumerate(_ensure_list(value), start=1):
+        if isinstance(item, str):
+            claim = _normalize_text(item)
+            if claim:
+                findings.append(
+                    {
+                        "finding_id": f"finding-{index}",
+                        "claim": claim,
+                        "source_ids": [],
+                        "confidence": "medium",
+                    }
+                )
+            continue
+        if not isinstance(item, dict):
+            continue
+        claim = _normalize_text(
+            str(item.get("claim") or item.get("summary") or item.get("title") or "")
+        )
+        if not claim:
+            continue
+        findings.append(
+            {
+                "finding_id": _normalize_text(str(item.get("finding_id") or f"finding-{index}")),
+                "claim": claim,
+                "source_ids": [str(value) for value in _ensure_list(item.get("source_ids"))],
+                "confidence": _normalize_confidence(item.get("confidence")),
+            }
+        )
+    return findings
+
+
+def _normalize_risks(value: Any) -> list[dict[str, Any]]:
+    risks: list[dict[str, Any]] = []
+    for index, item in enumerate(_ensure_list(value), start=1):
+        if isinstance(item, str):
+            description = _normalize_text(item)
+            if description:
+                risks.append(
+                    {
+                        "risk_id": f"risk-{index}",
+                        "description": description,
+                        "source_ids": [],
+                        "risk_type": "uncertainty",
+                        "severity": "medium",
+                    }
+                )
+            continue
+        if not isinstance(item, dict):
+            continue
+        description = _normalize_text(
+            str(item.get("description") or item.get("summary") or item.get("title") or "")
+        )
+        if not description:
+            continue
+        risks.append(
+            {
+                "risk_id": _normalize_text(str(item.get("risk_id") or f"risk-{index}")),
+                "description": description,
+                "source_ids": [str(value) for value in _ensure_list(item.get("source_ids"))],
+                "risk_type": _normalize_text(str(item.get("risk_type") or "uncertainty")),
+                "severity": _normalize_confidence(item.get("severity")),
+            }
+        )
+    return risks
 
 
 def _normalize_source(source: dict[str, Any], index: int) -> dict[str, Any]:
     return {
-        "source_id": _normalize_text(str(source.get("source_id") or source.get("id") or f"source-{index + 1}")),
+        "source_id": _normalize_text(
+            str(source.get("source_id") or source.get("id") or f"source-{index + 1}")
+        ),
         "title": _normalize_text(str(source.get("title") or f"来源 {index + 1}")),
         "url": source.get("url"),
         "published_at": source.get("published_at"),
@@ -285,7 +358,6 @@ def _fallback_section(research_result: dict[str, Any]) -> dict[str, Any]:
         "summary": None,
         "body": body,
         "key_findings": [],
-        "evidence_chain": [],
         "tables": [],
         "charts": [],
         "risks": [],
@@ -305,7 +377,6 @@ def _build_research_result_from_legacy_kwargs(legacy_kwargs: dict[str, Any]) -> 
                 "title": draft.get("title") or f"章节 {index + 1}",
                 "body": draft.get("content") or "",
                 "key_findings": [],
-                "evidence_chain": [],
                 "tables": [],
                 "charts": [],
                 "risks": [],
@@ -323,7 +394,6 @@ def _build_research_result_from_legacy_kwargs(legacy_kwargs: dict[str, Any]) -> 
                     "summary": node.get("question"),
                     "body": node.get("description") or "",
                     "key_findings": [],
-                    "evidence_chain": [],
                     "tables": [],
                     "charts": [],
                     "risks": [],
@@ -476,7 +546,10 @@ def _render_section(section: dict[str, Any]) -> str:
     section_id = section.get("section_id", "")
     heading_text = f"{section_id} {section['title']}" if section_id else section["title"]
     parts = [
-        f"<section class=\"report-section{' section-overview' if is_overview else ''}\" id=\"{anchor}\">",
+        (
+            "<section class=\"report-section"
+            f"{' section-overview' if is_overview else ''}\" id=\"{anchor}\">"
+        ),
         f"<h2>{escape(heading_text)}</h2>",
     ]
     if section.get("summary"):
@@ -490,56 +563,65 @@ def _render_section(section: dict[str, Any]) -> str:
     if not is_overview:
         # 叶子章节：渲染辅助结构
         parts.append(_render_key_findings(section.get("key_findings", [])))
-        parts.append(_render_evidence_inline(section.get("evidence_chain", [])))
-        parts.extend(_render_table(table, index) for index, table in enumerate(section.get("tables", [])))
-        parts.extend(_render_chart_placeholder(chart, index) for index, chart in enumerate(section.get("charts", [])))
+        parts.append(_render_source_refs_inline(section))
+        parts.extend(
+            _render_table(table, index)
+            for index, table in enumerate(section.get("tables", []))
+        )
+        parts.extend(
+            _render_chart_placeholder(chart, index)
+            for index, chart in enumerate(section.get("charts", []))
+        )
         parts.append(_render_risks(section.get("risks", [])))
 
     parts.append("</section>")
     return "".join(parts)
 
 
-def _render_key_findings(findings: list[str]) -> str:
+def _render_key_findings(findings: list[dict[str, Any]]) -> str:
     if not findings:
         return ""
-    items = "".join(f"<li>{escape(finding)}</li>" for finding in findings if finding)
-    return f"<div class=\"finding-box\"><h3>关键发现</h3><ul>{items}</ul></div>"
-
-
-def _render_evidence_chain(evidence_chain: list[dict[str, Any]]) -> str:
-    """独立证据链框（保留给兼容场景）。"""
-    if not evidence_chain:
-        return ""
-    rows = []
-    for evidence in evidence_chain:
-        source_refs = _build_citations(evidence["source_ids"])
-        confidence = _confidence_label(evidence["confidence"])
-        rows.append(
+    items = []
+    for finding in findings:
+        claim = str(finding.get("claim") or "")
+        if not claim:
+            continue
+        citations = _build_citations([str(value) for value in finding.get("source_ids", [])])
+        confidence = _confidence_label(str(finding.get("confidence") or "medium"))
+        items.append(
             "<li>"
-            f"<span class=\"claim\">{escape(evidence['claim'])}</span>"
+            f"{escape(claim)}"
+            f"{citations}"
             f"<span class=\"confidence\">{escape(confidence)}</span>"
-            f"{source_refs}"
             "</li>"
         )
-    return "<div class=\"evidence-chain\"><h3>证据链</h3><ol>" + "".join(rows) + "</ol></div>"
-
-
-def _render_evidence_inline(evidence_chain: list[dict[str, Any]]) -> str:
-    """紧凑行内证据引用——叶子章节专用。
-
-    合并同源引用，显示为一行：「来源：[1][2][3]」
-    """
-    if not evidence_chain:
+    if not items:
         return ""
-    all_source_ids: list[str] = []
-    for evidence in evidence_chain:
-        for sid in evidence.get("source_ids", []):
-            if sid not in all_source_ids:
-                all_source_ids.append(sid)
+    items_html = "".join(items)
+    return f"<div class=\"finding-box\"><h3>关键发现</h3><ul>{items_html}</ul></div>"
+
+
+def _render_source_refs_inline(section: dict[str, Any]) -> str:
+    """从关键发现和风险中渲染本章来源引用。"""
+
+    all_source_ids = _collect_section_source_ids(section)
     if not all_source_ids:
         return ""
     citations = _build_citations(all_source_ids)
     return f"<p class=\"evidence-inline\"><span>证据来源：</span>{citations}</p>"
+
+
+def _collect_section_source_ids(section: dict[str, Any]) -> list[str]:
+    source_ids: list[str] = []
+    for field_name in ("key_findings", "risks"):
+        for item in section.get(field_name, []):
+            if not isinstance(item, dict):
+                continue
+            for source_id in item.get("source_ids", []):
+                normalized_source_id = _normalize_text(str(source_id))
+                if normalized_source_id and normalized_source_id not in source_ids:
+                    source_ids.append(normalized_source_id)
+    return source_ids
 
 
 def _render_table(table: dict[str, Any], index: int) -> str:
@@ -562,7 +644,9 @@ def _render_table(table: dict[str, Any], index: int) -> str:
 
 def _render_chart_placeholder(chart: dict[str, Any], index: int) -> str:
     title = _normalize_text(str(chart.get("title") or f"图表 {index + 1}"))
-    description = _normalize_text(str(chart.get("description") or "主研究 agent 未提供可渲染图表数据。"))
+    description = _normalize_text(
+        str(chart.get("description") or "主研究 agent 未提供可渲染图表数据。")
+    )
     return (
         "<figure class=\"chart-placeholder\">"
         f"<figcaption>{escape(title)}</figcaption>"
@@ -571,11 +655,28 @@ def _render_chart_placeholder(chart: dict[str, Any], index: int) -> str:
     )
 
 
-def _render_risks(risks: list[str]) -> str:
+def _render_risks(risks: list[dict[str, Any]]) -> str:
     if not risks:
         return ""
-    items = "".join(f"<li>{escape(risk)}</li>" for risk in risks if risk)
-    return f"<aside class=\"risk-notes\"><h3>不确定性与风险</h3><ul>{items}</ul></aside>"
+    items = []
+    for risk in risks:
+        description = str(risk.get("description") or "")
+        if not description:
+            continue
+        citations = _build_citations([str(value) for value in risk.get("source_ids", [])])
+        severity = _confidence_label(str(risk.get("severity") or "medium"))
+        risk_type = str(risk.get("risk_type") or "uncertainty")
+        items.append(
+            "<li>"
+            f"{escape(description)}"
+            f"{citations}"
+            f"<span class=\"confidence\">{escape(risk_type)} / {escape(severity)}</span>"
+            "</li>"
+        )
+    if not items:
+        return ""
+    items_html = "".join(items)
+    return f"<aside class=\"risk-notes\"><h3>不确定性与风险</h3><ul>{items_html}</ul></aside>"
 
 
 def _render_references(
@@ -584,60 +685,70 @@ def _render_references(
 ) -> str:
     """渲染报告末尾的参考来源列表。
 
-    输入为顶层 sources 数组和 sections 列表。
-    当 sources 为空时，从所有 section 的 evidence_chain 中提取 source_ids，
-    并用 evidence 的 claim 作为来源描述。每个来源条目带 id 锚点，供行内引用跳转。
+    输入为顶层 sources 数组和 sections 列表。每个来源条目带 id 锚点，供行内引用
+    跳转；如果章节引用的 source_id 缺少来源详情，则保留明确的缺失说明。
     """
     parts = ["<section class=\"references\" id=\"references\"><h2>参考来源</h2><ol>"]
+    rendered_source_ids: set[str] = set()
 
-    if sources:
-        for source in sources:
-            source_id = escape(source.get("source_id", ""), quote=True)
-            source_text = escape(str(source.get("title", "")))
-            if source.get("published_at"):
-                source_text += f"，{escape(str(source['published_at']))}"
-            if source.get("url"):
-                source_text += (
-                    f"，<a href=\"{escape(str(source['url']), quote=True)}\""
-                    f" target=\"_blank\" rel=\"noopener\">"
-                    f"{escape(str(source['url']))}</a>"
-                )
-            parts.append(f"<li id=\"ref-{source_id}\">{source_text}</li>")
-    else:
-        # 从 evidence_chain 自建来源列表（数据不完整时的兜底）
-        evidence_sources = _collect_evidence_sources(sections or [])
-        if not evidence_sources:
-            parts.append("<li>暂无参考来源数据。</li>")
-        else:
-            for src in evidence_sources:
-                parts.append(
-                    f"<li id=\"ref-{escape(src['source_id'], quote=True)}\">"
-                    f"{escape(src['title'])}</li>"
-                )
+    for source in sources:
+        raw_source_id = str(source.get("source_id") or "")
+        if not raw_source_id:
+            continue
+        rendered_source_ids.add(raw_source_id)
+        source_id = escape(raw_source_id, quote=True)
+        source_text = escape(str(source.get("title", "")))
+        if source.get("published_at"):
+            source_text += f"，{escape(str(source['published_at']))}"
+        if source.get("url"):
+            source_text += (
+                f"，<a href=\"{escape(str(source['url']), quote=True)}\""
+                f" target=\"_blank\" rel=\"noopener\">"
+                f"{escape(str(source['url']))}</a>"
+            )
+        parts.append(f"<li id=\"ref-{source_id}\">{source_text}</li>")
+
+    referenced_sources = _collect_referenced_sources(sections or [])
+    for source in referenced_sources:
+        source_id = str(source["source_id"])
+        if source_id in rendered_source_ids:
+            continue
+        rendered_source_ids.add(source_id)
+        escaped_source_id = escape(source_id)
+        parts.append(
+            f"<li id=\"ref-{escape(source_id, quote=True)}\" class=\"reference-missing\">"
+            f"来源详情缺失（{escaped_source_id}）</li>"
+        )
+
+    if not rendered_source_ids:
+        parts.append("<li>暂无参考来源数据。</li>")
 
     parts.append("</ol></section>")
     return "".join(parts)
 
 
-def _collect_evidence_sources(
+def _collect_referenced_sources(
     sections: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """从所有 section 的 evidence_chain 中提取去重的来源信息。
+    """在缺少来源详情时，从章节引用编号生成兜底来源列表。
 
-    每个来源以 source_id 去重，取第一条 claim 作为标题。
-    返回按 source_id 排序的列表。
+    正常报告应使用 research_result.sources；该函数只处理 sources 为空的兼容渲染。
     """
+
     seen: dict[str, dict[str, Any]] = {}
     for section in sections:
-        for evidence in section.get("evidence_chain", []):
-            for sid in evidence.get("source_ids", []):
-                if not sid or sid in seen:
-                    continue
-                claim = evidence.get("claim", "")
-                seen[sid] = {
-                    "source_id": str(sid),
-                    "title": claim if claim else f"来源 {str(sid).removeprefix('source-')}",
-                }
+        for finding in section.get("key_findings", []):
+            _collect_source_ids_from_item(
+                item=finding,
+                title=str(finding.get("claim") or ""),
+                seen=seen,
+            )
+        for risk in section.get("risks", []):
+            _collect_source_ids_from_item(
+                item=risk,
+                title=str(risk.get("description") or ""),
+                seen=seen,
+            )
 
     def _sort_key(item: dict[str, Any]) -> tuple:
         sid = str(item.get("source_id", ""))
@@ -651,6 +762,21 @@ def _collect_evidence_sources(
         return tuple(nums) if nums else (9999,)
 
     return sorted(seen.values(), key=_sort_key)
+
+
+def _collect_source_ids_from_item(
+    item: dict[str, Any],
+    title: str,
+    seen: dict[str, dict[str, Any]],
+) -> None:
+    for sid in item.get("source_ids", []):
+        source_id = str(sid or "")
+        if not source_id or source_id in seen:
+            continue
+        seen[source_id] = {
+            "source_id": source_id,
+            "title": title if title else f"来源 {source_id.removeprefix('source-')}",
+        }
 
 
 _md_parser = MarkdownIt("commonmark", {"typographer": True}).enable(["table", "strikethrough"])
@@ -739,8 +865,14 @@ def _confidence_label(confidence: str) -> str:
     return labels.get(confidence, "中置信度")
 
 
+def _normalize_confidence(value: Any) -> str:
+    confidence = _normalize_text(str(value or "medium")).lower()
+    return confidence if confidence in {"high", "medium", "low"} else "medium"
+
+
 def _public_source(source: dict[str, Any]) -> dict[str, Any]:
     return {
+        "source_id": source.get("source_id"),
         "title": source["title"],
         "url": source.get("url"),
         "published_at": source.get("published_at"),
@@ -784,79 +916,127 @@ def _build_css() -> str:
     return """
 :root {
   color-scheme: light;
-  --bg: #f6f7f9;
+  --bg: #eef1ef;
   --paper: #ffffff;
-  --ink: #1d2433;
-  --muted: #667085;
-  --line: #d9dee7;
-  --accent: #246b5a;
-  --accent-soft: #e3f1ed;
-  --warn: #8a5a00;
-  --warn-soft: #fff3cf;
+  --ink: #202624;
+  --muted: #65706b;
+  --line: #dce2df;
+  --line-strong: #bfc9c4;
+  --accent: #176b5b;
+  --accent-soft: #edf5f2;
+  --warn: #8a5a16;
+  --warn-soft: #fff8e8;
 }
 * { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", sans-serif;
-  line-height: 1.72;
+  font-size: 16px;
+  line-height: 1.82;
 }
 .report-paper {
-  width: min(860px, calc(100% - 48px));
-  margin: 40px auto 56px;
+  width: min(940px, calc(100% - 48px));
+  margin: 28px auto 48px;
   background: var(--paper);
   border: 1px solid var(--line);
-  padding: 56px 72px 48px;
+  border-top: 5px solid var(--accent);
+  box-shadow: 0 16px 45px rgba(31, 44, 39, .08);
+  padding: 64px 84px 56px;
 }
 .report-hero {
-  padding-bottom: 32px;
-  margin-bottom: 40px;
+  padding-bottom: 36px;
+  margin-bottom: 36px;
   border-bottom: 1px solid var(--line);
 }
 .eyebrow {
   color: var(--accent);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0;
   text-transform: uppercase;
 }
 h1, h2, h3 { line-height: 1.28; letter-spacing: 0; }
-h1 { margin: 10px 0 12px; font-size: 36px; }
-h2 { margin: 0 0 16px; font-size: 25px; }
-h3 { margin: 18px 0 10px; font-size: 18px; }
-p { margin: 0 0 12px; }
-a { color: var(--accent); }
-.toc {
-  padding-bottom: 20px;
-  margin-bottom: 36px;
-  border-bottom: 1px solid var(--line);
+h1 {
+  margin: 12px 0 16px;
+  max-width: 20em;
+  font-size: 38px;
+  font-weight: 760;
+  overflow-wrap: anywhere;
 }
+h2 { margin: 0 0 18px; font-size: 25px; font-weight: 720; }
+h3 { margin: 28px 0 12px; font-size: 18px; font-weight: 700; }
+h4 { margin: 24px 0 10px; font-size: 16px; }
+p { margin: 0 0 16px; }
+ul, ol { margin: 0 0 18px; padding-left: 1.45em; }
+li { margin-bottom: 7px; }
+strong { font-weight: 700; }
+a { color: var(--accent); }
+.report-hero p {
+  max-width: 52em;
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+.toc {
+  margin: 0 0 40px;
+  padding: 24px 28px;
+  background: #f6f8f7;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+}
+.toc h2 { margin-bottom: 12px; font-size: 18px; }
 .summary-card {
   background: var(--accent-soft);
-  border: 1px solid #c8e1da;
-  padding: 24px 28px;
-  margin-bottom: 40px;
+  border-top: 1px solid #c8ddd6;
+  border-bottom: 1px solid #c8ddd6;
+  padding: 28px 30px 24px;
+  margin: 0 0 48px;
 }
-.report-body {
-  /* continuous flow — sections flow as one article */
-}
+.summary-card h2 { font-size: 20px; }
+.summary-card p:last-child { margin-bottom: 0; }
 .report-section {
-  margin-bottom: 48px;
+  margin-bottom: 56px;
+  scroll-margin-top: 24px;
 }
 .report-section h2 {
-  margin: 0 0 20px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
+  margin: 0 0 24px;
+  padding: 0 0 12px;
+  border-bottom: 2px solid var(--ink);
 }
 .section-overview {
+  margin-top: 8px;
+  padding-left: 22px;
   border-left: 4px solid var(--accent);
-  padding-left: 20px;
+}
+.section-overview h2 {
+  border-bottom-color: var(--line);
 }
 .references {
-  margin-top: 48px;
-  padding-top: 32px;
-  border-top: 2px solid var(--line);
+  margin-top: 64px;
+  padding-top: 36px;
+  border-top: 3px solid var(--ink);
+  scroll-margin-top: 24px;
+}
+.references ol {
+  padding-left: 1.6em;
+}
+.references li {
+  margin-bottom: 12px;
+  padding-left: 4px;
+  color: #39423e;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.references li.reference-missing {
+  color: var(--warn);
+  background: var(--warn-soft);
+}
+.references a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 .toc ul, .toc-tree {
   margin: 0;
@@ -868,9 +1048,10 @@ a { color: var(--accent); }
 }
 .toc-tree li {
   position: relative;
-  padding: 4px 0 4px 18px;
+  margin: 0;
+  padding: 3px 0 3px 18px;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.65;
 }
 .toc-tree li::before {
   content: "";
@@ -888,8 +1069,8 @@ a { color: var(--accent); }
   position: relative;
   cursor: pointer;
   list-style: none;
-  padding: 4px 0;
-  font-weight: 650;
+  padding: 3px 0;
+  font-weight: 700;
 }
 .toc-parent > details > summary::-webkit-details-marker {
   display: none;
@@ -921,51 +1102,78 @@ a { color: var(--accent); }
 .toc-tree a {
   color: var(--ink);
   text-decoration: none;
+  overflow-wrap: anywhere;
 }
 .toc-tree a:hover {
   color: var(--accent);
-  text-decoration: underline;
 }
 .section-summary {
+  margin: -8px 0 24px;
+  padding: 12px 0 12px 16px;
   color: var(--muted);
-  border-left: 3px solid var(--accent);
-  padding-left: 12px;
+  border-left: 3px solid var(--line-strong);
+  font-size: 15px;
 }
 .evidence-inline {
+  margin: 16px 0 24px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
   color: var(--muted);
   font-size: 13px;
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--line);
 }
 .evidence-inline span {
   margin-right: 6px;
 }
-.finding-box, .evidence-chain, .chart-placeholder {
+.finding-box {
+  margin: 28px 0 20px;
+  padding: 20px 24px 16px;
   background: var(--accent-soft);
-  border: 1px solid #c8e1da;
-  padding: 18px;
-  margin: 18px 0;
+  border-left: 4px solid var(--accent);
+}
+.finding-box h3 {
+  margin: 0 0 12px;
+  color: var(--accent);
+  font-size: 16px;
+}
+.finding-box ul {
+  margin-bottom: 0;
+}
+.finding-box li {
+  margin-bottom: 12px;
+  padding-left: 3px;
+}
+.finding-box li:last-child {
+  margin-bottom: 0;
+}
+.chart-placeholder {
+  margin: 24px 0;
+  padding: 20px 24px;
+  background: #f6f8f7;
+  border: 1px dashed var(--line-strong);
 }
 .risk-notes {
+  margin: 28px 0 20px;
+  padding: 18px 24px 14px;
   background: var(--warn-soft);
-  border: 1px solid #f2d98a;
+  border-left: 4px solid #c58a2a;
   color: var(--warn);
-  padding: 14px 18px;
-  margin: 18px 0;
 }
-.evidence-chain li {
-  margin-bottom: 10px;
+.risk-notes h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+.risk-notes ul {
+  margin-bottom: 0;
 }
 .claim {
   display: block;
-  font-weight: 650;
+  font-weight: 700;
 }
 .confidence {
-  display: inline-block;
-  margin-right: 8px;
+  display: block;
+  margin-top: 3px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 .cite-link {
   text-decoration: none;
@@ -979,38 +1187,102 @@ a { color: var(--accent); }
   color: var(--ink);
   text-decoration: underline;
 }
-.references li:target {
+.references li:target,
+.references li.report-anchor-highlight {
   background: var(--warn-soft);
-  outline: 2px solid var(--warn);
-  outline-offset: 2px;
+  outline: 2px solid #d19a3f;
+  outline-offset: 3px;
 }
 .data-table {
-  margin: 20px 0;
+  margin: 28px 0;
   overflow-x: auto;
+  border: 1px solid var(--line);
 }
 figcaption {
-  margin-bottom: 8px;
+  padding: 9px 12px;
+  background: #f6f8f7;
+  border-bottom: 1px solid var(--line);
   color: var(--muted);
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 700;
 }
 table {
   width: 100%;
   border-collapse: collapse;
   background: var(--paper);
+  font-size: 14px;
 }
 th, td {
-  border: 1px solid var(--line);
-  padding: 10px 12px;
+  padding: 11px 13px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
 }
+tr:last-child td { border-bottom: 0; }
+th:last-child, td:last-child { border-right: 0; }
 th {
-  background: #eef2f6;
+  background: #eef2f0;
   font-weight: 700;
 }
-@media (max-width: 640px) {
-  .report-paper { width: min(100% - 24px, 860px); padding: 32px 24px 24px; }
-  h1 { font-size: 28px; }
-  h2 { font-size: 22px; }
+tbody tr:nth-child(even) { background: #fafbfa; }
+blockquote {
+  margin: 24px 0;
+  padding: 4px 0 4px 18px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--muted);
+}
+code {
+  padding: 2px 5px;
+  background: #eef2f0;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .9em;
+}
+pre {
+  max-width: 100%;
+  margin: 24px 0;
+  padding: 18px;
+  overflow-x: auto;
+  background: #202624;
+  color: #f3f5f4;
+}
+pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+@media (max-width: 720px) {
+  body { background: var(--paper); font-size: 15px; }
+  .report-paper {
+    width: 100%;
+    margin: 0;
+    padding: 34px 22px 40px;
+    border: 0;
+    border-top: 4px solid var(--accent);
+    box-shadow: none;
+  }
+  .report-hero { margin-bottom: 28px; padding-bottom: 28px; }
+  h1 { font-size: 29px; }
+  h2 { font-size: 21px; }
+  .toc { padding: 20px; }
+  .summary-card { margin-left: -22px; margin-right: -22px; padding: 24px 22px 20px; }
+  .report-section { margin-bottom: 44px; }
+  .section-overview { padding-left: 16px; }
+  .finding-box, .risk-notes { padding-left: 18px; padding-right: 18px; }
+  th, td { min-width: 120px; }
+}
+@media print {
+  body { background: #fff; }
+  .report-paper {
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+  }
+  .toc { break-after: page; }
+  .report-section, .finding-box, .risk-notes, .data-table { break-inside: avoid; }
+  a { color: inherit; text-decoration: none; }
 }
 """.strip()

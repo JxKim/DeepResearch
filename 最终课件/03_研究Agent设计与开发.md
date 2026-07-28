@@ -581,21 +581,21 @@ flowchart LR
 
 整个 Agent 链路可以拆成两层：
 
-| 层级   | 名称      | 作用                                        |
-| ---- | ------- | ----------------------------------------- |
-| 主智能体 | 研究管理智能体 | 理解研究任务、生成大纲、修改大纲、拆解章节、协调检索、整理事实和洞察、写出章节正文 |
-| 子智能体 | 信息检索智能体 | 围绕主智能体分派的问题进行公开搜索、网页读取、内部知识库检索和事实整理       |
+| 层级   | 名称      | 作用                                       |
+| ---- | ------- | ---------------------------------------- |
+| 主智能体 | 研究管理智能体 | 理解研究任务、生成大纲、修改大纲、拆解章节、协调检索、整理事实材料、写出章节正文 |
+| 子智能体 | 信息检索智能体 | 围绕主智能体分派的问题进行公开搜索、网页读取、内部知识库检索和事实整理      |
 
 各个阶段的职责边界如下：
 
-| 阶段         | 是否使用 LLM Agent             | 产物                                                |
-| ---------- | -------------------------- | ------------------------------------------------- |
-| 生成研究任务书和大纲 | 使用研究管理智能体                  | `research_brief`、`outline`                        |
-| 修改大纲       | 使用研究管理智能体                  | 修订后的 `outline`                                    |
-| 执行研究       | 使用研究管理智能体 + 信息检索智能体        | `sections`、`sources`、`fact_cards`、`insight_cards` |
-| 渲染报告       | 不使用agent，仅使用html渲染器对报告进行渲染 | HTML、目录、引用、参考来源                                   |
+| 阶段         | 是否使用 LLM Agent             | 产物                         |
+| ---------- | -------------------------- | -------------------------- |
+| 生成研究任务书和大纲 | 使用研究管理智能体                  | `research_brief`、`outline` |
+| 修改大纲       | 使用研究管理智能体                  | 修订后的 `outline`             |
+| 执行研究       | 使用研究管理智能体 + 信息检索智能体        | `sections`、项目级去重 `sources` |
+| 渲染报告       | 不使用agent，仅使用html渲染器对报告进行渲染 | HTML、目录、引用、参考来源            |
 
-这个设计的核心原因是：研究过程需要 LLM 进行理解、拆解、检索规划、归纳和写作；但报告渲染阶段主要是结构转换和页面展示，不应该让 LLM 重新补写事实、改写证据链或生成新的来源。
+这个设计的核心原因是：研究过程需要 LLM 进行理解、拆解、检索规划、归纳和写作；但报告渲染阶段主要是结构转换和页面展示，不应该让 LLM 重新补写事实、改写引用关系或生成新的来源。
 
 整体流程如下：
 
@@ -627,9 +627,9 @@ flowchart TD
 
 ## 3. 研究Agent设计
 
-在前面的架构设计环节，整个研究过程已经拆成两个 Agent：一个是主研究管理者，另一个专门负责收集信息、整理来源并构建事实证据链。
+在前面的架构设计环节，整个研究过程已经拆成两个 Agent：一个是主研究管理者，另一个专门负责收集信息、整理来源、事实材料和冲突信息。
 
-这里要注意一个边界：信息检索智能体不是“帮忙写报告”的智能体，它只负责证据材料；主研究智能体才负责把证据组织成章节正文和研究结果。
+这里要注意一个边界：信息检索智能体不是“帮忙写报告”的智能体，它只负责检索材料；主研究智能体才负责把材料组织成章节正文、关键发现和风险说明。
 
 ### 3.1 主研究智能体的职责
 
@@ -643,11 +643,11 @@ flowchart TD
 
 - 将检索问题分派给信息检索智能体。
 
-- 整理来源、事实卡片、冲突信息和洞察卡片。
+- 整理来源、事实材料和冲突信息。
 
 - 写出每个章节的完整正文。
 
-- 为关键判断构建证据链。
+- 为关键判断填写 `source_ids`，保证关键发现和风险说明可以追溯到来源。
 
 - 调用 `save_research_section` 工具，将章节研究结果保存至数据库。
 
@@ -679,17 +679,20 @@ flowchart TD
 class ResearchAgent:
     """研究智能体业务门面。"""
 
-    def __init__(self, manager_agent: Any | None = None, report_agent: Any | None = None) -> None:
+    def __init__(self, manager_agent: Any) -> None:
         self.manager_agent = manager_agent
-        self.report_agent = report_agent
 
     async def generate_research_brief(self, project: dict[str, Any] | None) -> ResearchBriefResult:
-        payload = self._build_generate_research_brief_input(project=project)
+        payload = {
+            "task_name": "generate_research_brief",
+            "project": project or {},
+            "expected_output": "ResearchBriefResult",
+        }
         raw_result = await self._invoke_manager_agent(
             task_name="generate_research_brief",
             payload=payload,
         )
-        return self._parse_research_brief_result(raw_result=raw_result, project=project)
+        return self._parse_research_brief_result(raw_result=raw_result)
 
     async def revise_outline(
         self,
@@ -697,16 +700,18 @@ class ResearchAgent:
         outline: list[OutlineNode],
         revision_instruction: str,
     ) -> list[OutlineNode]:
-        payload = self._build_revise_outline_input(
-            project=project,
-            outline=outline,
-            revision_instruction=revision_instruction,
-        )
+        payload = {
+            "task_name": "revise_outline",
+            "project": project or {},
+            "outline": [node.model_dump(mode="python") for node in outline],
+            "revision_instruction": revision_instruction,
+            "expected_output": "list[OutlineNode]",
+        }
         raw_result = await self._invoke_manager_agent(
             task_name="revise_outline",
             payload=payload,
         )
-        return self._parse_outline_result(raw_result=raw_result, fallback_outline=outline)
+        return self._parse_outline_result(raw_result=raw_result)
 ```
 
 研究执行阶段不是一次性要求模型返回一个巨大的 `research_result`，而是要求主智能体逐章节调用工具落库：
@@ -725,14 +730,16 @@ async def generate_research_result(
     missing_section_ids = sorted(expected_section_ids)
 
     for attempt in range(1, 5):
-        payload = self._build_generate_research_result_input(
-            project=project,
-            outline=outline,
-            user_instruction=user_instruction,
-            required_section_ids=sorted(expected_section_ids),
-            missing_section_ids=missing_section_ids,
-            attempt=attempt,
-        )
+        payload = {
+            "task_name": "generate_report",
+            "project": project or {},
+            "outline": [node.model_dump(mode="python") for node in outline],
+            "user_instruction": user_instruction,
+            "required_section_ids": sorted(expected_section_ids),
+            "missing_section_ids": missing_section_ids,
+            "attempt": attempt,
+            "expected_output": "save sections with save_research_section",
+        }
         await self._invoke_manager_agent(task_name="generate_report", payload=payload)
         sections = await research_project_repository.get_research_sections(project_id=project_id)
         saved_section_ids = {
@@ -759,9 +766,9 @@ async def generate_research_result(
 ```markdown
 你是 AI 研究报告工作台中的研究管理智能体。
 
-你的职责是完成研究本身：理解任务、设计大纲、协调信息检索、整理事实、形成洞察、写出完整章节正文，并产出可落库的结构化研究结果。
+你的职责是完成研究本身：理解任务、设计大纲、协调信息检索、整理来源和事实材料，基于证据形成章节关键发现与风险说明，写出完整章节正文，并通过工具保存可落库的结构化研究内容。
 
-你不是报告渲染智能体。你不负责把研究结果渲染为最终 HTML。报告渲染由后端确定性渲染流程基于你落库的 `research_result` 完成。
+你不是报告渲染智能体。你不负责把研究结果渲染为最终 HTML。报告渲染由后端确定性渲染流程基于你落库的 `sections/sources` 完成。
 ```
 
 针对 `generate_report` 任务，Prompt 明确要求主智能体逐章节保存结果：
@@ -774,7 +781,7 @@ async def generate_research_result(
 1. 基于已确认大纲识别需要写正文的章节。
 2. 如果任务载荷中存在 `missing_section_ids`，本轮只处理这些章节，不要重写已保存章节。
 3. 对每个章节拆解检索问题，委托信息检索智能体获取公开来源和可复核事实。
-4. 写出该章节完整正文、关键发现、证据链、表格/图表结构、风险说明和本章来源详情。
+4. 写出该章节完整正文、关键发现、表格/图表结构、风险说明和本章来源详情。
 5. 调用 `save_research_section(project_id, section)` 保存该章节。
 ```
 
@@ -900,7 +907,7 @@ async def ragflow_search(
 ```markdown
 你是 AI 研究报告工作台中的信息检索智能体。
 
-你的职责是围绕研究管理智能体分派的问题进行资料检索、网页读取、内部知识库检索、事实整理和证据链输出。
+你的职责是围绕研究管理智能体分派的问题进行资料检索、网页读取、内部知识库检索、来源整理、事实材料整理和冲突信息输出。
 
 搜索工具用于发现来源，不把搜索摘要直接当作最终事实。
 网页读取工具用于获取可追溯正文和来源元数据。
@@ -1004,18 +1011,19 @@ class FactCard(BaseModel):
     confidence: str = "medium"
 
 
-class InsightCard(BaseModel):
-    insight_id: str
-    title: str
-    summary: str
-    supporting_fact_ids: list[str] = Field(default_factory=list)
-
-
-class EvidenceItem(BaseModel):
+class KeyFinding(BaseModel):
+    finding_id: str
     claim: str
-    fact_ids: list[str] = Field(default_factory=list)
     source_ids: list[str] = Field(default_factory=list)
     confidence: str = "medium"
+
+
+class RiskItem(BaseModel):
+    risk_id: str
+    description: str
+    source_ids: list[str] = Field(default_factory=list)
+    risk_type: str = "uncertainty"
+    severity: str = "medium"
 ```
 
 章节研究结果结构如下：
@@ -1026,15 +1034,14 @@ class ResearchSection(BaseModel):
     title: str
     summary: str | None = None
     body: str
-    key_findings: list[str] = Field(default_factory=list)
-    evidence_chain: list[EvidenceItem] = Field(default_factory=list)
+    key_findings: list[KeyFinding] = Field(default_factory=list)
     sources: list[ReportSource] = Field(default_factory=list)
     tables: list[dict[str, Any]] = Field(default_factory=list)
     charts: list[dict[str, Any]] = Field(default_factory=list)
-    risks: list[str] = Field(default_factory=list)
+    risks: list[RiskItem] = Field(default_factory=list)
 ```
 
-完整研究结果结构如下：
+临时渲染输入结构如下：
 
 ```python
 class ResearchResult(BaseModel):
@@ -1043,11 +1050,10 @@ class ResearchResult(BaseModel):
     sections: list[ResearchSection] = Field(default_factory=list)
     sources: list[ReportSource] = Field(default_factory=list)
     fact_cards: list[FactCard] = Field(default_factory=list)
-    insight_cards: list[InsightCard] = Field(default_factory=list)
     synthesis: ResearchSynthesis | None = None
 ```
 
-这些结构就是研究阶段和报告渲染阶段之间的边界对象。
+这里要注意：`ResearchResult` 不作为项目字段落库。当前项目持久化保存的是 `ResearchProject.sections` 和 `ResearchProject.sources`，报告渲染前再由代码临时组装 `ResearchResult`。
 
 ### 4.2 DeepAgents框架的介绍
 
@@ -1139,7 +1145,7 @@ def _build_deepagents_input(self, payload: dict[str, Any]) -> dict[str, Any]:
         "files": {
             "/research/task_payload.json": create_file_data(task_json),
             "/research/workspace/README.md": create_file_data(
-                "该目录用于保存检索摘要、来源整理、事实卡片、洞察卡片和报告草稿。"
+                "该目录用于保存检索摘要、来源整理、事实卡片、章节发现、风险说明和报告草稿。"
             ),
         },
     }
@@ -1194,7 +1200,6 @@ class ReportGenerationResult(BaseModel):
     html: str
     sources: list[ReportSource] = Field(default_factory=list)
     fact_cards: list[FactCard] = Field(default_factory=list)
-    insight_cards: list[InsightCard] = Field(default_factory=list)
 ```
 
 #### 2. 编写章节保存工具
@@ -1238,9 +1243,9 @@ async def save_research_section(project_id: str, section: dict[str, Any]) -> dic
 
 - `key_findings` 至少有一条非空关键发现。
 
-- `evidence_chain` 至少有一条证据链。
+- `key_findings[].source_ids` 至少引用一个来源。
 
-- `evidence_chain.source_ids` 引用的来源必须能在 `section.sources` 或项目已有来源中找到。
+- `key_findings.source_ids` 和 `risks.source_ids` 引用的来源必须能在 `section.sources` 中找到。
 
 #### 3. 构建 Agent 单例
 
@@ -1251,7 +1256,7 @@ _research_agent: ResearchAgent | None = None
 
 def build_research_agent() -> ResearchAgent:
     manager_agent = _build_deepagents_manager_agent()
-    return ResearchAgent(manager_agent=manager_agent, report_agent=None)
+    return ResearchAgent(manager_agent=manager_agent)
 
 def get_research_agent() -> ResearchAgent:
     global _research_agent
@@ -1289,15 +1294,10 @@ research_result = await research_agent.generate_research_result(
     outline=outline,
     user_instruction=user_instruction,
 )
-await research_project_repository.save_research_result(
-    project_id=project_id,
-    research_result=research_result,
-)
 
-project_with_research_result = await research_project_repository.get_project(project_id=project_id)
+project_after_research = await research_project_repository.get_project(project_id=project_id)
 result = await research_agent.generate_report(
-    project=project_with_research_result,
-    outline=outline,
+    project=project_after_research,
     user_instruction=user_instruction,
 )
 await report_repository.save_report_version(
@@ -1316,14 +1316,16 @@ await report_repository.save_report_version(
 async def generate_report(
     self,
     project: dict[str, Any] | None,
-    outline: list[OutlineNode],
     user_instruction: str | None,
 ) -> ReportGenerationResult:
-    payload = self._build_generate_report_input(
-        project=project,
-        outline=outline,
-        user_instruction=user_instruction,
-    )
+    research_result = self._build_research_result_from_project(project=project)
+    payload = {
+        "task_name": "render_report",
+        "project_id": project.get("project_id") if isinstance(project, dict) else None,
+        "research_result": research_result.model_dump(mode="python"),
+        "user_instruction": user_instruction,
+        "expected_output": "ReportGenerationResult",
+    }
     raw_result = await write_html_report(
         research_result=payload["research_result"],
         layout_plan=self._build_default_layout_plan(payload=payload),
@@ -1364,7 +1366,7 @@ async def write_html_report(
 
 - 不调用搜索工具。
 
-- 不改写证据链。
+- 不改写引用关系。
 
 最终，Agent 开发完成后，整个链路是：
 

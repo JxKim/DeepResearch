@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     llm_provider: str = "openai"
     llm_model_name: str = "gpt-4.1-mini"
     llm_temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    report_max_sections: int | None = Field(default=4, ge=1, le=50)
     openai_api_base: OptionalUrl = None
     openai_api_key: str | None = None
     deepseek_api_base: OptionalUrl = None

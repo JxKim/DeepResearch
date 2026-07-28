@@ -72,7 +72,7 @@ async def save_report_version(
     """保存研究报告版本。
 
     输入为项目编号、报告标题、HTML 正文和来源列表；输出为保存后的报告版本响应。
-    该函数只保存报告成品，不保存事实卡片和洞察卡片。
+    该函数只保存报告成品，不保存事实卡片或章节研究材料。
     """
 
     latest_document = await _get_collection().find_one(
@@ -116,5 +116,18 @@ async def get_latest_report(project_id: str) -> LatestReportResponse | None:
     document = await _get_collection().find_one(
         {"project_id": project_id},
         sort=[("version", -1)],
+    )
+    return await _report_from_document(document)
+
+
+async def get_most_recent_report() -> LatestReportResponse | None:
+    """读取所有项目中最近成功保存的报告。
+
+    输入为空，输出为按创建时间倒序排列的第一份报告；尚无报告版本时返回 None。
+    """
+
+    document = await _get_collection().find_one(
+        {},
+        sort=[("created_at", -1)],
     )
     return await _report_from_document(document)

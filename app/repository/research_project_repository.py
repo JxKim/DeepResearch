@@ -2,7 +2,13 @@ from datetime import datetime
 from typing import Any
 
 from app.repository.mongodb import get_mongodb_database
-from app.schemas import OutlineNode, ProjectStatus, ResearchProjectCreate, ReportSource, utc_now
+from app.schemas import (
+    OutlineNode,
+    ProjectStatus,
+    ReportSource,
+    ResearchProjectCreate,
+    utc_now,
+)
 
 COLLECTION_NAME = "research_projects"
 
@@ -49,11 +55,7 @@ def _dump_outline(outline: list[OutlineNode] | list[dict[str, Any]]) -> list[dic
 
 
 def _dump_sources(sources: list[ReportSource] | list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """把来源列表转换为可写入 MongoDB 的字典列表。
-
-    输入为 ReportSource 列表或字典列表，输出为字典列表。该函数只做结构转换，
-    不负责判断来源是否可信。
-    """
+    """把来源列表转换为可写入 MongoDB 的字典列表。"""
 
     dumped_sources: list[dict[str, Any]] = []
     for source in sources:
@@ -86,11 +88,8 @@ async def create_project(
         "outline": [],
         "confirmed_outline": [],
         "research_brief": None,
-        "research_result": None,
         "sections": [],
         "sources": [],
-        "fact_cards": [],
-        "insight_cards": [],
         "created_at": created_at,
         "updated_at": created_at,
     }
@@ -204,37 +203,6 @@ async def save_confirmed_outline(
     )
 
 
-async def save_research_results(
-    project_id: str,
-    sources: list[ReportSource] | list[dict[str, Any]],
-    fact_cards: list[Any],
-    insight_cards: list[Any],
-    research_result: Any | None = None,
-) -> None:
-    """保存研究过程产出的来源、事实卡片和洞察卡片。
-
-    输入为项目编号、来源列表、事实卡片、洞察卡片和可选完整研究结果，输出为空。
-    该函数只保存结构化研究过程产物，不生成报告版本。
-    """
-
-    update_fields: dict[str, Any] = {
-        "sources": _dump_sources(sources),
-        "fact_cards": [_dump_value(card) for card in fact_cards],
-        "insight_cards": [_dump_value(card) for card in insight_cards],
-        "updated_at": utc_now(),
-    }
-    if research_result is not None:
-        dumped_research_result = _dump_value(research_result)
-        update_fields["research_result"] = dumped_research_result
-        if isinstance(dumped_research_result, dict):
-            update_fields["sections"] = dumped_research_result.get("sections", [])
-
-    await _get_collection().update_one(
-        {"project_id": project_id},
-        {"$set": update_fields},
-    )
-
-
 async def clear_research_sections(project_id: str) -> None:
     """清空研究章节草稿。
 
@@ -248,9 +216,6 @@ async def clear_research_sections(project_id: str) -> None:
             "$set": {
                 "sections": [],
                 "sources": [],
-                "fact_cards": [],
-                "insight_cards": [],
-                "research_result": None,
                 "updated_at": utc_now(),
             }
         },
@@ -276,36 +241,45 @@ async def upsert_research_section(project_id: str, section: dict[str, Any]) -> N
 
 
 async def upsert_research_sources(project_id: str, sources: list[dict[str, Any]]) -> None:
-    """按 source_id/url/title 合并保存研究来源。
+    """按 URL 优先合并保存全项目研究来源。
 
-    输入为项目编号和来源字典列表，输出为空。该方法用于逐章节研究落库时同步维护
-    项目级 sources，保证 research_result 和报告渲染阶段可以追溯 evidence_chain。
+    source_id 可能是主智能体每个章节内从 source-1 重新开始的局部编号，不能作为
+    跨章节去重键。有 URL 时按 URL 去重；无 URL 时用 source_type/title 兜底。
     """
 
     now = utc_now()
     for source in sources:
-        source_key = str(
-            source.get("source_id")
-            or source.get("url")
-            or source.get("title")
-            or ""
-        ).strip()
-        if not source_key:
+        source_key = _source_dedupe_key(source)
+        if source_key is None:
             continue
-        if source.get("source_id"):
-            await _get_collection().update_one(
-                {"project_id": project_id},
-                {"$pull": {"sources": {"source_id": source.get("source_id")}}},
-            )
-        if source.get("url"):
-            await _get_collection().update_one(
-                {"project_id": project_id},
-                {"$pull": {"sources": {"url": source.get("url")}}},
-            )
+        source_filter = (
+            {"url": source_key}
+            if source.get("url")
+            else {
+                "url": {"$in": [None, ""]},
+                "source_type": source.get("source_type"),
+                "title": source.get("title"),
+            }
+        )
+        await _get_collection().update_one(
+            {"project_id": project_id},
+            {"$pull": {"sources": source_filter}},
+        )
         await _get_collection().update_one(
             {"project_id": project_id},
             {"$push": {"sources": source}, "$set": {"updated_at": now}},
         )
+
+
+def _source_dedupe_key(source: dict[str, Any]) -> str | None:
+    url = str(source.get("url") or "").strip()
+    if url:
+        return url
+    title = str(source.get("title") or "").strip()
+    source_type = str(source.get("source_type") or "").strip()
+    if not title:
+        return None
+    return f"{source_type}:{title}"
 
 
 async def get_research_sections(project_id: str) -> list[dict[str, Any]]:
@@ -323,31 +297,12 @@ async def get_research_sections(project_id: str) -> list[dict[str, Any]]:
 
 
 async def get_research_sources(project_id: str) -> list[dict[str, Any]]:
-    """读取当前项目已落库的研究来源。"""
+    """读取当前项目已去重的研究来源。"""
 
     document = await _get_collection().find_one({"project_id": project_id}, {"sources": 1})
     if document is None:
         return []
     return [source for source in document.get("sources", []) if isinstance(source, dict)]
-
-
-async def save_research_result(project_id: str, research_result: Any) -> None:
-    """保存完整研究结果。
-
-    输入为项目编号和主研究智能体产出的 ResearchResult；输出为空。该方法用于把研究
-    和报告渲染解耦，report agent 后续只读取已落库的 research_result。
-    """
-
-    dumped_research_result = _dump_value(research_result)
-    if not isinstance(dumped_research_result, dict):
-        dumped_research_result = {}
-    await save_research_results(
-        project_id=project_id,
-        sources=dumped_research_result.get("sources", []),
-        fact_cards=dumped_research_result.get("fact_cards", []),
-        insight_cards=dumped_research_result.get("insight_cards", []),
-        research_result=dumped_research_result,
-    )
 
 
 def _dump_value(value: Any) -> Any:

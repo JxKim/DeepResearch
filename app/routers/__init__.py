@@ -15,7 +15,6 @@ from app.background.research_tasks import (
 from app.repository import report_repository, research_project_repository, research_task_repository
 from app.schemas import (
     LatestReportResponse,
-    NextStep,
     OutlineAction,
     OutlineConfirmResponse,
     OutlineResponse,
@@ -99,7 +98,6 @@ async def create_research_project(
         initial_task_type=TaskType.GENERATE_RESEARCH_BRIEF,
         topic=request.topic,
         status=ProjectStatus.BRIEF_GENERATING,
-        next_step=NextStep.WAIT_FOR_OUTLINE,
         created_at=created_at,
     )
 
@@ -155,7 +153,6 @@ async def update_outline(
         return OutlineConfirmResponse(
             project_id=project_id,
             status=ProjectStatus.OUTLINE_CONFIRMED,
-            next_step=NextStep.GENERATE_REPORT,
         )
 
     task = await _create_task(
@@ -177,7 +174,6 @@ async def update_outline(
         project_id=project_id,
         revision_task_id=task.task_id,
         status=ProjectStatus.OUTLINE_REVISING,
-        next_step=NextStep.WAIT_FOR_OUTLINE,
     )
 
 
@@ -238,14 +234,14 @@ async def create_report_render_task(
     """提交独立报告渲染任务。
 
     输入为项目编号和可选报告展示要求，输出为报告渲染任务编号。该接口只基于已经
-    落库的 research_result 调用确定性报告渲染流程，不重新执行研究。
+    落库的 sections/sources 调用确定性报告渲染流程，不重新执行研究。
     """
 
     project = await _get_project(project_id)
-    if not project.get("research_result"):
+    if not project.get("sections"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="当前研究项目尚未生成研究结果，无法直接渲染报告",
+            detail="当前研究项目尚未保存研究章节，无法直接渲染报告",
         )
 
     task = await _create_task(
@@ -278,6 +274,20 @@ async def get_task(task_id: str) -> TaskStatusResponse:
     if task is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="后台任务不存在")
     return task
+
+
+@router.get(
+    "/reports/latest",
+    response_model=LatestReportResponse,
+    tags=["研究报告"],
+)
+async def get_most_recent_report() -> LatestReportResponse:
+    """获取所有项目中最近成功保存的报告。"""
+
+    report = await report_repository.get_most_recent_report()
+    if report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="尚无已完成的研究报告")
+    return report
 
 
 @router.get(

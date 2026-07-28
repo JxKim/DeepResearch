@@ -1,7 +1,7 @@
 """
 该模块用于定义所有接口的schema信息
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field, model_validator
@@ -60,14 +60,6 @@ class OutlineAction(StrEnum):
     REVISE = "revise"
 
 
-class NextStep(StrEnum):
-    """下一步操作枚举，用于给前端提供稳定的流程跳转提示。"""
-
-    WAIT_FOR_OUTLINE = "wait_for_outline"
-    GENERATE_REPORT = "generate_report"
-    WAIT_FOR_REPORT = "wait_for_report"
-
-
 class TimeScope(BaseModel):
     """研究时间范围结构，负责校验时间范围类型和近年数量之间的关系。"""
 
@@ -94,14 +86,13 @@ class ResearchProjectCreate(BaseModel):
 
 
 class ResearchProjectCreateResponse(BaseModel):
-    """创建研究项目响应结构，返回项目编号、初始任务编号和后续动作。"""
+    """创建研究项目响应结构，返回项目编号、初始任务编号和当前状态。"""
 
     project_id: str
     initial_task_id: str
     initial_task_type: TaskType
     topic: str
     status: ProjectStatus
-    next_step: NextStep
     created_at: datetime
 
 
@@ -113,6 +104,21 @@ class OutlineNode(BaseModel):
     question: str = Field(min_length=1, max_length=300)
     description: str = Field(min_length=1, max_length=500)
     children: list["OutlineNode"] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_missing_description(cls, value: object) -> object:
+        """模型偶发漏写章节说明时，使用研究问题或标题补齐。"""
+
+        if not isinstance(value, dict):
+            return value
+        description = value.get("description")
+        if isinstance(description, str) and description.strip():
+            return value
+        fallback = value.get("question") or value.get("title")
+        if not isinstance(fallback, str) or not fallback.strip():
+            return value
+        return {**value, "description": fallback.strip()}
 
 
 class OutlineResponse(BaseModel):
@@ -139,20 +145,18 @@ class OutlineUpdateRequest(BaseModel):
 
 
 class OutlineConfirmResponse(BaseModel):
-    """大纲确认响应结构，返回确认后的项目状态和下一步操作。"""
+    """大纲确认响应结构，返回确认后的项目状态。"""
 
     project_id: str
     status: ProjectStatus
-    next_step: NextStep
 
 
 class OutlineRevisionResponse(BaseModel):
-    """大纲修改响应结构，返回修改任务编号和等待大纲完成的下一步提示。"""
+    """大纲修改响应结构，返回修改任务编号和当前项目状态。"""
 
     project_id: str
     revision_task_id: str
     status: ProjectStatus
-    next_step: NextStep
 
 
 class ReportTaskCreate(BaseModel):
@@ -207,4 +211,51 @@ class LatestReportResponse(BaseModel):
 def utc_now() -> datetime:
     """返回 UTC 当前时间，统一接口响应和任务状态中的时间格式。"""
 
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
+
+
+from app.schemas.research import (  # noqa: E402
+    FactCard,
+    KeyFinding,
+    ReportGenerationResult,
+    ResearchBrief,
+    ResearchBriefResult,
+    ResearchProject,
+    ResearchResult,
+    ResearchSection,
+    ResearchSynthesis,
+    RiskItem,
+)
+
+__all__ = [
+    "FactCard",
+    "KeyFinding",
+    "LatestReportResponse",
+    "OutlineAction",
+    "OutlineConfirmResponse",
+    "OutlineNode",
+    "OutlineResponse",
+    "OutlineRevisionResponse",
+    "OutlineUpdateRequest",
+    "ProjectStatus",
+    "RegionScope",
+    "ReportGenerationResult",
+    "ReportSource",
+    "ReportTaskCreate",
+    "ReportTaskCreateResponse",
+    "ResearchBrief",
+    "ResearchBriefResult",
+    "ResearchProject",
+    "ResearchProjectCreate",
+    "ResearchProjectCreateResponse",
+    "ResearchResult",
+    "ResearchSection",
+    "ResearchSynthesis",
+    "RiskItem",
+    "TaskStatus",
+    "TaskStatusResponse",
+    "TaskType",
+    "TimeScope",
+    "TimeScopeType",
+    "utc_now",
+]

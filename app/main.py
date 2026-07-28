@@ -1,9 +1,6 @@
-from typing import Any
-
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from loguru import logger
 
 from app.config.config import Settings, get_settings
 from app.routers import router as research_projects_router
@@ -30,6 +27,15 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(research_projects_router, prefix=settings.api_prefix)
+
+    @app.middleware("http")
+    async def disable_index_cache(request: Request, call_next):
+        """避免本地工作台首页缓存旧版内联 JavaScript。"""
+
+        response = await call_next(request)
+        if request.url.path in {"/", "/index.html"}:
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
 
     @app.get("/health", tags=["系统"])
